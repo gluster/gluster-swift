@@ -47,6 +47,7 @@ DIR_NON_OBJECT = 'dir'
 DIR_OBJECT = 'marker_dir'
 TEMP_DIR = 'tmp'
 ASYNCDIR = 'async_pending'  # Keep in sync with swift.obj.server.ASYNCDIR
+TRASHCAN = '.trashcan'
 FILE = 'file'
 FILE_TYPE = 'application/octet-stream'
 OBJECT = 'Object'
@@ -212,7 +213,7 @@ def validate_account(metadata):
     return False
 
 
-def validate_object(metadata):
+def validate_object(metadata, stat=None):
     if not metadata:
         return False
 
@@ -222,6 +223,12 @@ def validate_object(metadata):
        X_CONTENT_LENGTH not in metadata.keys() or \
        X_TYPE not in metadata.keys() or \
        X_OBJECT_TYPE not in metadata.keys():
+        return False
+
+    if stat and (int(metadata[X_CONTENT_LENGTH]) != stat.st_size):
+        # File length has changed.
+        # TODO: Handle case where file content has changed but the length
+        # remains the same.
         return False
 
     if metadata[X_TYPE] == OBJECT:
@@ -242,8 +249,16 @@ def _update_list(path, cont_path, src_list, reg_file=True, object_count=0,
         if not reg_file and not Glusterfs._implicit_dir_objects:
             # Now check if this is a dir object or a gratuiously crated
             # directory
-            metadata = \
-                read_metadata(os.path.join(cont_path, obj_path, obj_name))
+            try:
+                metadata = \
+                    read_metadata(os.path.join(cont_path, obj_path, obj_name))
+            except GlusterFileSystemIOError as err:
+                if err.errno in (errno.ENOENT, errno.ESTALE):
+                    # object might have been deleted by another process
+                    # since the src_list was originally built
+                    continue
+                else:
+                    raise err
             if not dir_is_object(metadata):
                 continue
 
@@ -304,6 +319,7 @@ def get_account_details(acc_path):
         for name in do_listdir(acc_path):
             if name.lower() == TEMP_DIR \
                     or name.lower() == ASYNCDIR \
+                    or name.lower() == TRASHCAN \
                     or not do_isdir(os.path.join(acc_path, name)):
                 continue
             container_count += 1
@@ -476,7 +492,7 @@ def rmobjdir(dir_path):
     try:
         do_rmdir(dir_path)
     except OSError as err:
-        if err.errno == errno.ENOENT:
+        if err.errno in (errno.ENOENT, errno.ESTALE):
             # No such directory exists
             return False
         if err.errno != errno.ENOTEMPTY:
@@ -494,8 +510,8 @@ def rmobjdir(dir_path):
 
             try:
                 metadata = read_metadata(fullpath)
-            except OSError as err:
-                if err.errno == errno.ENOENT:
+            except GlusterFileSystemIOError as err:
+                if err.errno in (errno.ENOENT, errno.ESTALE):
                     # Ignore removal from another entity.
                     continue
                 raise
@@ -513,7 +529,7 @@ def rmobjdir(dir_path):
                 if err.errno == errno.ENOTEMPTY:
                     # Directory is not empty, it might have objects in it
                     return False
-                if err.errno == errno.ENOENT:
+                if err.errno in (errno.ENOENT, errno.ESTALE):
                     # No such directory exists, already removed, ignore
                     continue
                 raise
@@ -524,7 +540,7 @@ def rmobjdir(dir_path):
         if err.errno == errno.ENOTEMPTY:
             # Directory is not empty, race with object creation
             return False
-        if err.errno == errno.ENOENT:
+        if err.errno in (errno.ENOENT, errno.ESTALE):
             # No such directory exists, already removed, ignore
             return True
         raise

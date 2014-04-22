@@ -26,7 +26,10 @@ from gluster.swift.common.utils import validate_account, validate_container, \
     X_CONTENT_LENGTH, X_TIMESTAMP, X_PUT_TIMESTAMP, X_ETAG, X_OBJECTS_COUNT, \
     X_BYTES_USED, X_CONTAINER_COUNT, DIR_TYPE, rmobjdir, dir_is_object
 from gluster.swift.common import Glusterfs
-from gluster.swift.common.exceptions import FileOrDirNotFoundError
+from gluster.swift.common.exceptions import FileOrDirNotFoundError, \
+    GlusterFileSystemIOError
+from swift.common.constraints import MAX_META_COUNT, MAX_META_OVERALL_SIZE
+from swift.common.swob import HTTPBadRequest
 
 
 DATADIR = 'containers'
@@ -176,7 +179,12 @@ class DiskCommon(object):
     def _dir_exists_read_metadata(self):
         self._dir_exists = do_exists(self.datadir)
         if self._dir_exists:
-            self.metadata = _read_metadata(self.datadir)
+            try:
+                self.metadata = _read_metadata(self.datadir)
+            except GlusterFileSystemIOError as err:
+                if err.errno in (errno.ENOENT, errno.ESTALE):
+                    return False
+                raise
         return self._dir_exists
 
     def is_deleted(self):
@@ -195,12 +203,41 @@ class DiskCommon(object):
         except FileOrDirNotFoundError:
             return True
 
-    def update_metadata(self, metadata):
+    def validate_metadata(self, metadata):
+        """
+        Validates that metadata falls within acceptable limits.
+
+        :param metadata: to be validated
+        :raises: HTTPBadRequest if MAX_META_COUNT or MAX_META_OVERALL_SIZE
+                 is exceeded
+        """
+        meta_count = 0
+        meta_size = 0
+        for key, (value, timestamp) in metadata.iteritems():
+            key = key.lower()
+            if value != '' and (key.startswith('x-account-meta') or
+                                key.startswith('x-container-meta')):
+                prefix = 'x-account-meta-'
+                if key.startswith('x-container-meta-'):
+                    prefix = 'x-container-meta-'
+                key = key[len(prefix):]
+                meta_count = meta_count + 1
+                meta_size = meta_size + len(key) + len(value)
+        if meta_count > MAX_META_COUNT:
+            raise HTTPBadRequest('Too many metadata items; max %d'
+                                 % MAX_META_COUNT)
+        if meta_size > MAX_META_OVERALL_SIZE:
+            raise HTTPBadRequest('Total metadata too large; max %d'
+                                 % MAX_META_OVERALL_SIZE)
+
+    def update_metadata(self, metadata, validate_metadata=False):
         assert self.metadata, "Valid container/account metadata should have " \
             "been created by now"
         if metadata:
             new_metadata = self.metadata.copy()
             new_metadata.update(metadata)
+            if validate_metadata:
+                self.validate_metadata(new_metadata)
             if new_metadata != self.metadata:
                 write_metadata(self.datadir, new_metadata)
                 self.metadata = new_metadata
@@ -362,7 +399,15 @@ class DiskDir(DiskCommon):
         count = 0
         for obj in objects:
             obj_path = os.path.join(self.datadir, obj)
-            metadata = read_metadata(obj_path)
+            try:
+                metadata = read_metadata(obj_path)
+            except GlusterFileSystemIOError as err:
+                if err.errno in (errno.ENOENT, errno.ESTALE):
+                    # obj might have been deleted by another process
+                    # since the objects list was originally built
+                    continue
+                else:
+                    raise err
             if not metadata or not validate_object(metadata):
                 if delimiter == '/' and obj_path[-1] == delimiter:
                     clean_obj_path = obj_path[:-1]
@@ -373,7 +418,7 @@ class DiskDir(DiskCommon):
                 except OSError as e:
                     # FIXME - total hack to get upstream swift ported unit
                     # test cases working for now.
-                    if e.errno != errno.ENOENT:
+                    if e.errno not in (errno.ENOENT, errno.ESTALE):
                         raise
             if not Glusterfs._implicit_dir_objects and metadata \
                     and metadata[X_CONTENT_TYPE] == DIR_TYPE \
@@ -450,7 +495,7 @@ class DiskDir(DiskCommon):
             # If we create it, ensure we own it.
             do_chown(self.datadir, self.uid, self.gid)
         metadata = get_container_metadata(self.datadir)
-        metadata[X_TIMESTAMP] = timestamp
+        metadata[X_TIMESTAMP] = (timestamp, 0)
         write_metadata(self.datadir, metadata)
         self.metadata = metadata
         self._dir_exists = True
@@ -562,7 +607,7 @@ class DiskAccount(DiskCommon):
         :param metadata: Metadata to write.
         """
         metadata = get_account_metadata(self.datadir)
-        metadata[X_TIMESTAMP] = timestamp
+        metadata[X_TIMESTAMP] = (timestamp, 0)
         write_metadata(self.datadir, metadata)
         self.metadata = metadata
 
@@ -672,7 +717,7 @@ class DiskAccount(DiskCommon):
                 except OSError as e:
                     # FIXME - total hack to get upstream swift ported unit
                     # test cases working for now.
-                    if e.errno != errno.ENOENT:
+                    if e.errno not in (errno.ENOENT, errno.ESTALE):
                         raise
             if metadata:
                 list_item.append(metadata[X_OBJECTS_COUNT][0])

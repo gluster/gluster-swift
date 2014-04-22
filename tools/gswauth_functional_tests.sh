@@ -50,7 +50,7 @@ quit()
 fail()
 {
         cleanup
-	quit "$1"
+	    quit "$1"
 }
 
 run_generic_tests()
@@ -66,9 +66,9 @@ run_generic_tests()
 
     nosetests -v --exe \
         --with-xunit \
-        --xunit-file functional_tests/gluster-swift-gswauth-generic-functional-TC-report.xml \
+        --xunit-file functional_tests_result/gluster-swift-gswauth-generic-functional-TC-report.xml \
         --with-html-output \
-        --html-out-file functional_tests/gluster-swift-gswauth-generic-functional-result.html \
+        --html-out-file functional_tests_result/gluster-swift-gswauth-generic-functional-result.html \
         test/functional || fail "Functional tests failed"
 }
 
@@ -91,6 +91,7 @@ export SWIFT_TEST_CONFIG_FILE=/etc/swift/test.conf
 
 # Install the configuration files
 sudo mkdir /etc/swift > /dev/null 2>&1
+sudo cp -r test/functional_auth/common_conf/* /etc/swift || fail "Unable to copy configuration files to /etc/swift"
 sudo cp -r test/functional_auth/gswauth/conf/* /etc/swift || fail "Unable to copy configuration files to /etc/swift"
 sudo_env gluster-swift-gen-builders test test2 gsmetadata || fail "Unable to create ring files"
 
@@ -101,12 +102,12 @@ sudo_env swift-init main start || fail "Unable to start swift"
 #swauth-prep
 sudo_env gswauth-prep -K gswauthkey || fail "Unable to prep gswauth"
 
-mkdir functional_tests > /dev/null 2>&1
+mkdir functional_tests_result > /dev/null 2>&1
 nosetests -v --exe \
 	--with-xunit \
-	--xunit-file functional_tests/gluster-swift-gswauth-functional-TC-report.xml \
+	--xunit-file functional_tests_result/gluster-swift-gswauth-functional-TC-report.xml \
     --with-html-output \
-    --html-out-file functional_tests/gluster-swift-gswauth-functional-result.html \
+    --html-out-file functional_tests_result/gluster-swift-gswauth-functional-result.html \
     test/functional_auth/gswauth || fail "Functional gswauth test failed"
 
 run_generic_tests

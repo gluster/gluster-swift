@@ -58,44 +58,13 @@ class TestFile(Base):
         data_read = file.read()
         self.assertEquals(data,data_read)
 
-    def testInvalidHeadersPUT(self):
-        #TODO: Although we now support x-delete-at and x-delete-after,
-        #retained this test case as we may add some other header to
-        #unsupported list in future
-        raise SkipTest()
-        file = self.env.container.file(Utils.create_name())
-        self.assertRaises(ResponseError,
-                          file.write_random,
-                          self.env.file_size,
-                          hdrs={'X-Delete-At': '9876545321'})
-        self.assert_status(400)
-        self.assertRaises(ResponseError,
-                          file.write_random,
-                          self.env.file_size,
-                          hdrs={'X-Delete-After': '60'})
-        self.assert_status(400)
-
-    def testInvalidHeadersPOST(self):
-        #TODO: Although we now support x-delete-at and x-delete-after,
-        #retained this test case as we may add some other header to
-        #unsupported list in future
-        raise SkipTest()
-        file = self.env.container.file(Utils.create_name())
-        file.write_random(self.env.file_size)
-        headers = file.make_headers(cfg={})
-        headers.update({ 'X-Delete-At' : '987654321'})
-        # Need to call conn.make_request instead of file.sync_metadata
-        # because sync_metadata calls make_headers.  make_headers()
-        # overwrites any headers in file.metadata as 'user' metadata
-        # by appending 'X-Object-Meta-' to any of the headers
-        # in file.metadata.
-        file.conn.make_request('POST', file.path, hdrs=headers, cfg={})
-        self.assertEqual(400, file.conn.response.status)
-
-        headers = file.make_headers(cfg={})
-        headers.update({ 'X-Delete-After' : '60'})
-        file.conn.make_request('POST', file.path, hdrs=headers, cfg={})
-        self.assertEqual(400, file.conn.response.status)
+    def test_PUT_large_object(self):
+        file_item = self.env.container.file(Utils.create_name())
+        data = File.random_data(1024 * 1024 * 2)
+        self.assertTrue(file_item.write(data))
+        self.assert_status(201)
+        self.assertTrue(data == file_item.read())
+        self.assert_status(200)
 
 
 class TestFileUTF8(Base2, TestFile):
@@ -375,3 +344,49 @@ class TestMultiProtocolAccess(Base):
         md5_returned = hashlib.md5(data_read_from_mountP).hexdigest()
         self.assertEquals(md5_returned,file_info['etag'])
         fhOnMountPoint.close()
+
+    def testObjectMetadataWhenFileModified(self):
+        data = "I'm whatever Gotham needs me to be "
+        data_hash = hashlib.md5(data).hexdigest()
+        # Create an object through object interface
+        object_name = Utils.create_name()
+        object_item = self.env.container.file(object_name)
+        object_item.write(data)
+        # Make sure GET works
+        self.assertEqual(data, object_item.read())
+        self.assert_status(200)
+        # Check Etag is right
+        self.assertEqual(data_hash, object_item.info()['etag'])
+        self.assert_status(200)
+
+        # Extend/append more data to file from filesystem interface
+        file_path = os.path.join(self.env.root_dir,
+                                 self.env.container.name,
+                                 object_name)
+        more_data = "- Batman"
+        with open(file_path, 'a') as f:
+            f.write(more_data)
+        total_data = data + more_data
+        total_data_hash = hashlib.md5(total_data).hexdigest()
+        # Make sure GET works
+        self.assertEqual(total_data, object_item.read())
+        self.assert_status(200)
+        # Check Etag and content-length is right
+        metadata = object_item.info()
+        self.assert_status(200)
+        self.assertEqual(total_data_hash, metadata['etag'])
+        self.assertEqual(len(total_data), int(metadata['content_length']))
+
+        # Re-write the file to be shorter
+        new_data = "I am Batman"
+        new_data_hash = hashlib.md5(new_data).hexdigest()
+        with open(file_path, 'w') as f:
+            f.write(new_data)
+        # Make sure GET works
+        self.assertEqual(new_data, object_item.read())
+        self.assert_status(200)
+        # Check Etag and content-length is right
+        metadata = object_item.info()
+        self.assert_status(200)
+        self.assertEqual(new_data_hash, metadata['etag'])
+        self.assertEqual(len(new_data), int(metadata['content_length']))

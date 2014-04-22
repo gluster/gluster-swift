@@ -46,7 +46,7 @@ class TestObjectExpirer(TestCase):
         self.old_loadapp = internal_client.loadapp
         self.old_sleep = internal_client.sleep
 
-        internal_client.loadapp = lambda x: None
+        internal_client.loadapp = lambda *a, **kw: None
         internal_client.sleep = not_sleep
 
     def teardown(self):
@@ -618,7 +618,7 @@ class TestObjectExpirer(TestCase):
             start_response('204 No Content', [('Content-Length', '0')])
             return []
 
-        internal_client.loadapp = lambda x: fake_app
+        internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
         ts = '1234'
@@ -635,7 +635,7 @@ class TestObjectExpirer(TestCase):
             start_response('204 No Content', [('Content-Length', '0')])
             return []
 
-        internal_client.loadapp = lambda x: fake_app
+        internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
         ts = '1234'
@@ -649,7 +649,7 @@ class TestObjectExpirer(TestCase):
             start_response('404 Not Found', [('Content-Length', '0')])
             return []
 
-        internal_client.loadapp = lambda x: fake_app
+        internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
         x.delete_actual_object('/path/to/object', '1234')
@@ -661,7 +661,7 @@ class TestObjectExpirer(TestCase):
                            [('Content-Length', '0')])
             return []
 
-        internal_client.loadapp = lambda x: fake_app
+        internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
         x.delete_actual_object('/path/to/object', '1234')
@@ -674,7 +674,7 @@ class TestObjectExpirer(TestCase):
                 [('Content-Length', '0')])
             return []
 
-        internal_client.loadapp = lambda x: fake_app
+        internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
         exc = None
@@ -692,7 +692,7 @@ class TestObjectExpirer(TestCase):
         x = expirer.ObjectExpirer({})
         x.swift.make_request = mock.MagicMock()
         x.delete_actual_object(name, timestamp)
-        x.swift.make_request.assert_called_once()
+        self.assertTrue(x.swift.make_request.called)
         self.assertEqual(x.swift.make_request.call_args[0][1],
                          '/v1/' + urllib.quote(name))
 

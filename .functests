@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# Copyright (c) 2013 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This program expects to be run by tox in a virtual python environment
+# so that it does not pollute the host development system
+
+EXIT_STATUS=0
+
+# Run functional tests with tempauth as auth middleware
+bash tools/tempauth_functional_tests.sh || EXIT_STATUS=$?
+
+# Run functional tests with gswauth as auth middleware
+bash tools/gswauth_functional_tests.sh || EXIT_STATUS=$?
+
+# Run object expirer functional tests if gsexpiring volume is found.
+if mount | grep "gsexpiring on /mnt/gluster-object/gsexpiring type fuse.glusterfs"; then
+	echo "Running object expirer functional tests"
+	bash tools/object_expirer_functional.sh || EXIT_STATUS=$?
+fi
+
+exit $EXIT_STATUS

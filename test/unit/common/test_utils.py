@@ -25,9 +25,10 @@ import hashlib
 import tarfile
 import shutil
 from collections import defaultdict
-from mock import patch
+from mock import patch, Mock
 from gluster.swift.common import utils, Glusterfs
-from gluster.swift.common.exceptions import GlusterFileSystemOSError
+from gluster.swift.common.exceptions import GlusterFileSystemOSError,\
+    GlusterFileSystemIOError
 from swift.common.exceptions import DiskFileNoSpace
 
 #
@@ -712,6 +713,18 @@ class TestUtils(unittest.TestCase):
         ret = utils.validate_object(md)
         assert ret
 
+    def test_validate_object_with_stat(self):
+        md = {utils.X_TIMESTAMP: 'na',
+              utils.X_CONTENT_TYPE: 'na',
+              utils.X_ETAG: 'bad',
+              utils.X_CONTENT_LENGTH: '12345',
+              utils.X_TYPE: utils.OBJECT,
+              utils.X_OBJECT_TYPE: 'na'}
+        fake_stat = Mock(st_size=12346)
+        self.assertFalse(utils.validate_object(md, fake_stat))
+        fake_stat = Mock(st_size=12345)
+        self.assertTrue(utils.validate_object(md, fake_stat))
+
 
 class TestUtilsDirObjects(unittest.TestCase):
 
@@ -794,7 +807,8 @@ class TestUtilsDirObjects(unittest.TestCase):
         def _mock_rm(path):
             print "_mock_rm-metadata_enoent(%s)" % path
             shutil.rmtree(path)
-            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
+            raise GlusterFileSystemIOError(errno.ENOENT,
+                                           os.strerror(errno.ENOENT))
 
         # Remove the files
         for f in self.files:
@@ -805,8 +819,8 @@ class TestUtilsDirObjects(unittest.TestCase):
         try:
             try:
                 self.assertTrue(utils.rmobjdir(self.rootdir))
-            except OSError:
-                self.fail("Unexpected OSError")
+            except IOError:
+                self.fail("Unexpected IOError")
             else:
                 pass
         finally:
