@@ -31,6 +31,7 @@ cleanup()
         sudo rm -rf /mnt/gluster-object/test{,2}/* > /dev/null 2>&1
         sudo rm -rf /mnt/gluster-object/gsexpiring/* > /dev/null 2>&1
         sudo setfattr -x user.swift.metadata /mnt/gluster-object/test{,2} > /dev/null 2>&1
+        sudo setfattr -x user.swift.metadata /mnt/gluster-object/gsexpiring > /dev/null 2>&1
 }
 
 quit()

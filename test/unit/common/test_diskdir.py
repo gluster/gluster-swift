@@ -18,7 +18,6 @@
 import os
 import errno
 import tempfile
-import cPickle as pickle
 import unittest
 import shutil
 import tarfile
@@ -26,6 +25,7 @@ import hashlib
 from time import time
 from swift.common.utils import normalize_timestamp
 from gluster.swift.common import utils
+from gluster.swift.common.utils import serialize_metadata, deserialize_metadata
 import gluster.swift.common.Glusterfs
 from test_utils import _initxattr, _destroyxattr, _setxattr, _getxattr
 from test.unit import FakeLogger
@@ -283,7 +283,7 @@ class TestDiskCommon(unittest.TestCase):
     def test__dir_exists_read_metadata_exists(self):
         datadir = os.path.join(self.td, self.fake_drives[0])
         fake_md = { "fake": (True,0) }
-        fake_md_p = pickle.dumps(fake_md, utils.PICKLE_PROTOCOL)
+        fake_md_p = serialize_metadata(fake_md)
         _setxattr(datadir, utils.METADATA_KEY, fake_md_p)
         dc = dd.DiskCommon(self.td, self.fake_drives[0],
                             self.fake_accounts[0], self.fake_logger)
@@ -339,7 +339,7 @@ class TestDiskCommon(unittest.TestCase):
         dc.update_metadata({'X-Container-Meta-foo': '42'})
         assert 'X-Container-Meta-foo' in dc.metadata
         assert dc.metadata['X-Container-Meta-foo'] == '42'
-        md = pickle.loads(_getxattr(dc.datadir, utils.METADATA_KEY))
+        md = deserialize_metadata(_getxattr(dc.datadir, utils.METADATA_KEY))
         assert dc.metadata == md, "%r != %r" % (dc.metadata, md)
         del dc.metadata['X-Container-Meta-foo']
         assert dc.metadata == md_copy
@@ -1248,7 +1248,7 @@ class TestDiskAccount(unittest.TestCase):
                 datadir = os.path.join(self.td, self.fake_drives[i])
                 fake_md = { "fake-drv-%d" % i: (True,0) }
                 self.fake_md.append(fake_md)
-                fake_md_p = pickle.dumps(fake_md, utils.PICKLE_PROTOCOL)
+                fake_md_p = serialize_metadata(fake_md)
                 _setxattr(datadir, utils.METADATA_KEY, fake_md_p)
             if i == 2:
                 # Third drive has valid account metadata
