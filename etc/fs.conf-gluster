@@ -11,3 +11,14 @@ mount_ip = localhost
 # used by all objects in the container. For most installations "off" works
 # fine.
 accurate_size_in_listing = off
+
+# In older versions of gluster-swift, metadata stored as xattrs of dirs/files
+# were serialized using PICKLE format. The PICKLE format is vulnerable to
+# exploits in deployments where a user has access to backend filesystem over
+# FUSE/SMB. Deserializing pickled metadata can result in malicious code being
+# executed if an attacker has stored malicious code as xattr from filesystem
+# interface. Although, new metadata is always serialized using JSON format,
+# existing metadata already stored in PICKLE format are loaded by default.
+# You can turn this option to 'off' once you have migrated all your metadata
+# from PICKLE format to JSON format using gluster-swift-migrate-metadata tool.
+read_pickled_metadata = on

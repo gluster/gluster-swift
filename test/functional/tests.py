@@ -1125,6 +1125,9 @@ class TestFile(Base):
         self.assert_status(400)
 
     def testMetadataNumberLimit(self):
+        raise SkipTest("Bad test")
+        # TODO(ppai): Fix it in upstream swift first
+        # Refer to comments below
         number_limit = load_constraint('max_meta_count')
         size_limit = load_constraint('max_meta_overall_size')
 
@@ -1137,10 +1140,13 @@ class TestFile(Base):
             metadata = {}
             while len(metadata.keys()) < i:
                 key = Utils.create_ascii_name()
+                # The following line returns a valid utf8 byte sequence
                 val = Utils.create_name()
 
                 if len(key) > j:
                     key = key[:j]
+                    # This slicing done below can make the 'utf8' byte
+                    # sequence invalid and hence it cannot be decoded.
                     val = val[:j]
 
                 size += len(key) + len(val)
@@ -1154,6 +1160,9 @@ class TestFile(Base):
                 self.assert_status(201)
                 self.assert_(file_item.sync_metadata())
                 self.assert_status((201, 202))
+                self.assert_(file_item.initialize())
+                self.assert_status(200)
+                self.assertEqual(file_item.metadata, metadata)
             else:
                 self.assertRaises(ResponseError, file_item.write)
                 self.assert_status(400)
@@ -1315,6 +1324,9 @@ class TestFile(Base):
                 self.assert_(file_item.write())
                 self.assert_status(201)
                 self.assert_(file_item.sync_metadata())
+                self.assert_(file_item.initialize())
+                self.assert_status(200)
+                self.assertEqual(file_item.metadata, metadata)
             else:
                 self.assertRaises(ResponseError, file_item.write)
                 self.assert_status(400)

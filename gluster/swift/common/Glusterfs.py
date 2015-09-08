@@ -37,6 +37,7 @@ _allow_mount_per_server = False
 _implicit_dir_objects = False
 _container_update_object_count = False
 _account_update_container_count = False
+_read_pickled_metadata = True
 
 if _fs_conf.read(os.path.join(SWIFT_DIR, 'fs.conf')):
     try:
@@ -94,6 +95,13 @@ if _fs_conf.read(os.path.join(SWIFT_DIR, 'fs.conf')):
             _fs_conf.get('DEFAULT',
                          'account_update_container_count',
                          "no") in TRUE_VALUES
+    except (NoSectionError, NoOptionError):
+        pass
+
+    try:
+        _read_pickled_metadata = _fs_conf.get('DEFAULT',
+                                              'read_pickled_metadata',
+                                              "on") in TRUE_VALUES
     except (NoSectionError, NoOptionError):
         pass
 

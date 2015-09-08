@@ -43,6 +43,7 @@ setup(
     scripts=[
         'bin/gluster-swift-gen-builders',
         'bin/gluster-swift-print-metadata',
+        'bin/gluster-swift-migrate-metadata',
         'gluster/swift/common/middleware/gswauth/bin/gswauth-add-account',
         'gluster/swift/common/middleware/gswauth/bin/gswauth-add-user',
         'gluster/swift/common/middleware/gswauth/bin/gswauth-cleanup-tokens',

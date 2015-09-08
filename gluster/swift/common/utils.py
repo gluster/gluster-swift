@@ -15,13 +15,17 @@
 
 import os
 import stat
+import json
 import errno
 import logging
 from hashlib import md5
 from eventlet import sleep
 import cPickle as pickle
+from cStringIO import StringIO
+import pickletools
 from gluster.swift.common.exceptions import GlusterFileSystemIOError
 from swift.common.exceptions import DiskFileNoSpace
+from swift.common.db import utf8encodekeys
 from gluster.swift.common.fs_utils import do_getctime, do_getmtime, do_stat, \
     do_listdir, do_walk, do_rmdir, do_log_rl, get_filename_from_fd, do_open, \
     do_isdir, do_getsize, do_getxattr, do_setxattr, do_removexattr, do_read, \
@@ -57,6 +61,39 @@ PICKLE_PROTOCOL = 2
 CHUNK_SIZE = 65536
 
 
+class SafeUnpickler(object):
+    """
+    Loading a pickled stream is potentially unsafe and exploitable because
+    the loading process can import modules/classes (via GLOBAL opcode) and
+    run any callable (via REDUCE opcode). As the metadata stored in Swift
+    is just a dictionary, we take away these powerful "features", thus
+    making the loading process safe. Hence, this is very Swift specific
+    and is not a general purpose safe unpickler.
+    """
+
+    __slots__ = 'OPCODE_BLACKLIST'
+    OPCODE_BLACKLIST = ('GLOBAL', 'REDUCE', 'BUILD', 'OBJ', 'NEWOBJ', 'INST',
+                        'EXT1', 'EXT2', 'EXT4')
+
+    @classmethod
+    def find_class(self, module, name):
+        # Do not allow importing of ANY module. This is really redundant as
+        # we block those OPCODEs that results in invocation of this method.
+        raise pickle.UnpicklingError('Potentially unsafe pickle')
+
+    @classmethod
+    def loads(self, string):
+        for opcode in pickletools.genops(string):
+            if opcode[0].name in self.OPCODE_BLACKLIST:
+                raise pickle.UnpicklingError('Potentially unsafe pickle')
+        orig_unpickler = pickle.Unpickler(StringIO(string))
+        orig_unpickler.find_global = self.find_class
+        return orig_unpickler.load()
+
+
+pickle.loads = SafeUnpickler.loads
+
+
 def normalize_timestamp(timestamp):
     """
     Format a timestamp (string or numeric) into a standardized
@@ -73,7 +110,7 @@ def normalize_timestamp(timestamp):
 
 
 def serialize_metadata(metadata):
-    return pickle.dumps(metadata, PICKLE_PROTOCOL)
+    return json.dumps(metadata, separators=(',', ':'))
 
 
 def deserialize_metadata(metastr):
@@ -81,16 +118,35 @@ def deserialize_metadata(metastr):
     Returns dict populated with metadata if deserializing is successful.
     Returns empty dict if deserialzing fails.
     """
-    if metastr.startswith('\x80\x02}') and metastr.endswith('.'):
-        # Assert that the metadata was indeed pickled before attempting
-        # to unpickle. This only *reduces* risk of malicious shell code
-        # being executed. However, it does NOT fix anything.
+    if metastr.startswith('\x80\x02}') and metastr.endswith('.') and \
+            Glusterfs._read_pickled_metadata:
+        # Assert that the serialized metadata is pickled using
+        # pickle protocol 2 and is a dictionary.
         try:
             return pickle.loads(metastr)
-        except (pickle.UnpicklingError, EOFError, AttributeError,
-                IndexError, ImportError, AssertionError):
+        except Exception:
+            logging.warning("pickle.loads() failed.", exc_info=True)
+            return {}
+    elif metastr.startswith('{') and metastr.endswith('}'):
+
+        def _list_to_tuple(d):
+            for k, v in d.iteritems():
+                if isinstance(v, list):
+                    d[k] = tuple(i.encode('utf-8')
+                                 if isinstance(i, unicode) else i for i in v)
+                if isinstance(v, unicode):
+                    d[k] = v.encode('utf-8')
+            return d
+
+        try:
+            metadata = json.loads(metastr, object_hook=_list_to_tuple)
+            utf8encodekeys(metadata)
+            return metadata
+        except (UnicodeDecodeError, ValueError):
+            logging.warning("json.loads() failed.", exc_info=True)
             return {}
     else:
+        logging.warning("Invalid metadata format (neither PICKLE nor JSON)")
         return {}
 
 
