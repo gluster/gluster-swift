@@ -19,8 +19,9 @@ import random
 import os,sys,re,hashlib
 from nose import SkipTest
 
-from test.functional.tests import config, locale, Base, Base2, Utils, \
+from test.functional.tests import Base, Base2, Utils, \
     TestFileEnv
+from test.functional import config, locale
 from test.functional.swift_test_client import Account, Connection, File, \
     ResponseError
 

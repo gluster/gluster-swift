@@ -28,6 +28,7 @@ import base64
 
 from eventlet.timeout import Timeout
 from eventlet import TimeoutError
+from swift import gettext_ as _
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPConflict, \
     HTTPCreated, HTTPForbidden, HTTPMethodNotAllowed, HTTPMovedPermanently, \
     HTTPNoContent, HTTPNotFound, HTTPUnauthorized, \

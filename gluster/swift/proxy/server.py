@@ -20,7 +20,7 @@ import gluster.swift.common.constraints  # noqa
 
 from swift.proxy.server import Application, mimetypes  # noqa
 from swift.proxy.controllers import AccountController  # noqa
-from swift.proxy.controllers import ObjectController  # noqa
+from swift.proxy.controllers import ObjectControllerRouter  # noqa
 from swift.proxy.controllers import ContainerController  # noqa
 
 

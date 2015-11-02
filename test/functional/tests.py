@@ -14,10 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Modifications by Red Hat, Inc.
-
 from datetime import datetime
-import os
 import hashlib
 import hmac
 import json
@@ -25,71 +22,24 @@ import locale
 import random
 import StringIO
 import time
-import threading
+import os
 import unittest
 import urllib
 import uuid
+from copy import deepcopy
+import eventlet
 from nose import SkipTest
-from ConfigParser import ConfigParser
+from swift.common.http import is_success, is_client_error
 
-from test import get_config
+from test.functional import normalized_urls, load_constraint, cluster_info
+from test.functional import check_response, retry
+import test.functional as tf
 from test.functional.swift_test_client import Account, Connection, File, \
     ResponseError
-from swift.common.constraints import MAX_FILE_SIZE, MAX_META_NAME_LENGTH, \
-    MAX_META_VALUE_LENGTH, MAX_META_COUNT, MAX_META_OVERALL_SIZE, \
-    MAX_OBJECT_NAME_LENGTH, CONTAINER_LISTING_LIMIT, ACCOUNT_LISTING_LIMIT, \
-    MAX_ACCOUNT_NAME_LENGTH, MAX_CONTAINER_NAME_LENGTH, MAX_HEADER_SIZE
 from gluster.swift.common.constraints import \
     set_object_name_component_length, get_object_name_component_length
 
-default_constraints = dict((
-    ('max_file_size', MAX_FILE_SIZE),
-    ('max_meta_name_length', MAX_META_NAME_LENGTH),
-    ('max_meta_value_length', MAX_META_VALUE_LENGTH),
-    ('max_meta_count', MAX_META_COUNT),
-    ('max_meta_overall_size', MAX_META_OVERALL_SIZE),
-    ('max_object_name_length', MAX_OBJECT_NAME_LENGTH),
-    ('container_listing_limit', CONTAINER_LISTING_LIMIT),
-    ('account_listing_limit', ACCOUNT_LISTING_LIMIT),
-    ('max_account_name_length', MAX_ACCOUNT_NAME_LENGTH),
-    ('max_container_name_length', MAX_CONTAINER_NAME_LENGTH),
-    ('max_header_size', MAX_HEADER_SIZE)))
-constraints_conf = ConfigParser()
-conf_exists = constraints_conf.read('/etc/swift/swift.conf')
-# Constraints are set first from the test config, then from
-# /etc/swift/swift.conf if it exists. If swift.conf doesn't exist,
-# then limit test coverage. This allows SAIO tests to work fine but
-# requires remote functional testing to know something about the cluster
-# that is being tested.
-config = get_config('func_test')
-for k in default_constraints:
-    if k in config:
-        # prefer what's in test.conf
-        config[k] = int(config[k])
-    elif conf_exists:
-        # swift.conf exists, so use what's defined there (or swift defaults)
-        # This normally happens when the test is running locally to the cluster
-        # as in a SAIO.
-        config[k] = default_constraints[k]
-    else:
-        # .functests don't know what the constraints of the tested cluster are,
-        # so the tests can't reliably pass or fail. Therefore, skip those
-        # tests.
-        config[k] = '%s constraint is not defined' % k
-
-web_front_end = config.get('web_front_end', 'integral')
-normalized_urls = config.get('normalized_urls', False)
 set_object_name_component_length()
-
-
-def load_constraint(name):
-    c = config[name]
-    if not isinstance(c, int):
-        raise SkipTest(c)
-    return c
-
-locale.setlocale(locale.LC_COLLATE, config.get('collate', 'C'))
-
 
 def create_limit_filename(name_limit):
     """
@@ -114,42 +64,6 @@ def create_limit_filename(name_limit):
         return "".join(filename_list[:-1])
     else:
         return "".join(filename_list)
-
-
-def chunks(s, length=3):
-    i, j = 0, length
-    while i < len(s):
-        yield s[i:j]
-        i, j = j, j + length
-
-
-def timeout(seconds, method, *args, **kwargs):
-    class TimeoutThread(threading.Thread):
-        def __init__(self, method, *args, **kwargs):
-            threading.Thread.__init__(self)
-
-            self.method = method
-            self.args = args
-            self.kwargs = kwargs
-            self.exception = None
-
-        def run(self):
-            try:
-                self.method(*self.args, **self.kwargs)
-            except Exception as e:
-                self.exception = e
-
-    t = TimeoutThread(method, *args, **kwargs)
-    t.start()
-    t.join(seconds)
-
-    if t.exception:
-        raise t.exception
-
-    if t.isAlive():
-        t._Thread__stop()
-        return True
-    return False
 
 
 class Utils(object):
@@ -207,10 +121,10 @@ class Base2(object):
 class TestAccountEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.containers = []
@@ -386,6 +300,28 @@ class TestAccount(Base):
             self.assertEqual(sorted(containers, cmp=locale.strcoll),
                              containers)
 
+    def testQuotedWWWAuthenticateHeader(self):
+        # check that the www-authenticate header value with the swift realm
+        # is correctly quoted.
+        conn = Connection(tf.config)
+        conn.authenticate()
+        inserted_html = '<b>Hello World'
+        hax = 'AUTH_haxx"\nContent-Length: %d\n\n%s' % (len(inserted_html),
+                                                        inserted_html)
+        quoted_hax = urllib.quote(hax)
+        conn.connection.request('GET', '/v1/' + quoted_hax, None, {})
+        resp = conn.connection.getresponse()
+        resp_headers = dict(resp.getheaders())
+        self.assertTrue('www-authenticate' in resp_headers,
+                        'www-authenticate not found in %s' % resp_headers)
+        actual = resp_headers['www-authenticate']
+        expected = 'Swift realm="%s"' % quoted_hax
+        # other middleware e.g. auth_token may also set www-authenticate
+        # headers in which case actual values will be a comma separated list.
+        # check that expected value is among the actual values
+        self.assertTrue(expected in actual,
+                        '%s not found in %s' % (expected, actual))
+
 
 class TestAccountUTF8(Base2, TestAccount):
     set_up = False
@@ -394,10 +330,10 @@ class TestAccountUTF8(Base2, TestAccount):
 class TestAccountNoContainersEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
 
@@ -423,10 +359,10 @@ class TestAccountNoContainersUTF8(Base2, TestAccountNoContainers):
 class TestContainerEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -714,11 +650,11 @@ class TestContainerUTF8(Base2, TestContainer):
 class TestContainerPathsEnv(object):
     @classmethod
     def setUp(cls):
-        raise SkipTest('Objects ending in / are not supported')
-        cls.conn = Connection(config)
+	raise SkipTest('Objects ending in / are not supported')
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.file_size = 8
@@ -894,11 +830,24 @@ class TestContainerPaths(Base):
 class TestFileEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
+        # creating another account and connection
+        # for account to account copy tests
+        config2 = deepcopy(tf.config)
+        config2['account'] = tf.config['account2']
+        config2['username'] = tf.config['username2']
+        config2['password'] = tf.config['password2']
+        cls.conn2 = Connection(config2)
+        cls.conn2.authenticate()
+
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
+        cls.account2 = cls.conn2.get_account()
+        cls.account2.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
         if not cls.container.create():
@@ -952,6 +901,62 @@ class TestFile(Base):
                 self.assert_(file_item.initialize())
                 self.assert_(metadata == file_item.metadata)
 
+    def testCopyAccount(self):
+        # makes sure to test encoded characters
+        source_filename = 'dealde%2Fl04 011e%204c8df/flash.png'
+        file_item = self.env.container.file(source_filename)
+
+        metadata = {Utils.create_ascii_name(): Utils.create_name()}
+
+        data = file_item.write_random()
+        file_item.sync_metadata(metadata)
+
+        dest_cont = self.env.account.container(Utils.create_name())
+        self.assert_(dest_cont.create())
+
+        acct = self.env.conn.account_name
+        # copy both from within and across containers
+        for cont in (self.env.container, dest_cont):
+            # copy both with and without initial slash
+            for prefix in ('', '/'):
+                dest_filename = Utils.create_name()
+
+                file_item = self.env.container.file(source_filename)
+                file_item.copy_account(acct,
+                                       '%s%s' % (prefix, cont),
+                                       dest_filename)
+
+                self.assert_(dest_filename in cont.files())
+
+                file_item = cont.file(dest_filename)
+
+                self.assert_(data == file_item.read())
+                self.assert_(file_item.initialize())
+                self.assert_(metadata == file_item.metadata)
+
+        dest_cont = self.env.account2.container(Utils.create_name())
+        self.assert_(dest_cont.create(hdrs={
+            'X-Container-Write': self.env.conn.user_acl
+        }))
+
+        acct = self.env.conn2.account_name
+        # copy both with and without initial slash
+        for prefix in ('', '/'):
+            dest_filename = Utils.create_name()
+
+            file_item = self.env.container.file(source_filename)
+            file_item.copy_account(acct,
+                                   '%s%s' % (prefix, dest_cont),
+                                   dest_filename)
+
+            self.assert_(dest_filename in dest_cont.files())
+
+            file_item = dest_cont.file(dest_filename)
+
+            self.assert_(data == file_item.read())
+            self.assert_(file_item.initialize())
+            self.assert_(metadata == file_item.metadata)
+
     def testCopy404s(self):
         source_filename = Utils.create_name()
         file_item = self.env.container.file(source_filename)
@@ -989,6 +994,77 @@ class TestFile(Base):
             self.assert_(not file_item.copy(
                 '%s%s' % (prefix, Utils.create_name()),
                 Utils.create_name()))
+
+    def testCopyAccount404s(self):
+        acct = self.env.conn.account_name
+        acct2 = self.env.conn2.account_name
+        source_filename = Utils.create_name()
+        file_item = self.env.container.file(source_filename)
+        file_item.write_random()
+
+        dest_cont = self.env.account.container(Utils.create_name())
+        self.assert_(dest_cont.create(hdrs={
+            'X-Container-Read': self.env.conn2.user_acl
+        }))
+        dest_cont2 = self.env.account2.container(Utils.create_name())
+        self.assert_(dest_cont2.create(hdrs={
+            'X-Container-Write': self.env.conn.user_acl,
+            'X-Container-Read': self.env.conn.user_acl
+        }))
+
+        for acct, cont in ((acct, dest_cont), (acct2, dest_cont2)):
+            for prefix in ('', '/'):
+                # invalid source container
+                source_cont = self.env.account.container(Utils.create_name())
+                file_item = source_cont.file(source_filename)
+                self.assert_(not file_item.copy_account(
+                    acct,
+                    '%s%s' % (prefix, self.env.container),
+                    Utils.create_name()))
+                if acct == acct2:
+                    # there is no such source container
+                    # and foreign user can have no permission to read it
+                    self.assert_status(403)
+                else:
+                    self.assert_status(404)
+
+                self.assert_(not file_item.copy_account(
+                    acct,
+                    '%s%s' % (prefix, cont),
+                    Utils.create_name()))
+                self.assert_status(404)
+
+                # invalid source object
+                file_item = self.env.container.file(Utils.create_name())
+                self.assert_(not file_item.copy_account(
+                    acct,
+                    '%s%s' % (prefix, self.env.container),
+                    Utils.create_name()))
+                if acct == acct2:
+                    # there is no such object
+                    # and foreign user can have no permission to read it
+                    self.assert_status(403)
+                else:
+                    self.assert_status(404)
+
+                self.assert_(not file_item.copy_account(
+                    acct,
+                    '%s%s' % (prefix, cont),
+                    Utils.create_name()))
+                self.assert_status(404)
+
+                # invalid destination container
+                file_item = self.env.container.file(source_filename)
+                self.assert_(not file_item.copy_account(
+                    acct,
+                    '%s%s' % (prefix, Utils.create_name()),
+                    Utils.create_name()))
+                if acct == acct2:
+                    # there is no such destination container
+                    # and foreign user can have no permission to write there
+                    self.assert_status(403)
+                else:
+                    self.assert_status(404)
 
     def testCopyNoDestinationHeader(self):
         source_filename = Utils.create_name()
@@ -1044,6 +1120,49 @@ class TestFile(Base):
                 self.assert_(file_item.initialize())
                 self.assert_(metadata == file_item.metadata)
 
+    def testCopyFromAccountHeader(self):
+        acct = self.env.conn.account_name
+        src_cont = self.env.account.container(Utils.create_name())
+        self.assert_(src_cont.create(hdrs={
+            'X-Container-Read': self.env.conn2.user_acl
+        }))
+        source_filename = Utils.create_name()
+        file_item = src_cont.file(source_filename)
+
+        metadata = {}
+        for i in range(1):
+            metadata[Utils.create_ascii_name()] = Utils.create_name()
+        file_item.metadata = metadata
+
+        data = file_item.write_random()
+
+        dest_cont = self.env.account.container(Utils.create_name())
+        self.assert_(dest_cont.create())
+        dest_cont2 = self.env.account2.container(Utils.create_name())
+        self.assert_(dest_cont2.create(hdrs={
+            'X-Container-Write': self.env.conn.user_acl
+        }))
+
+        for cont in (src_cont, dest_cont, dest_cont2):
+            # copy both with and without initial slash
+            for prefix in ('', '/'):
+                dest_filename = Utils.create_name()
+
+                file_item = cont.file(dest_filename)
+                file_item.write(hdrs={'X-Copy-From-Account': acct,
+                                      'X-Copy-From': '%s%s/%s' % (
+                                          prefix,
+                                          src_cont.name,
+                                          source_filename)})
+
+                self.assert_(dest_filename in cont.files())
+
+                file_item = cont.file(dest_filename)
+
+                self.assert_(data == file_item.read())
+                self.assert_(file_item.initialize())
+                self.assert_(metadata == file_item.metadata)
+
     def testCopyFromHeader404s(self):
         source_filename = Utils.create_name()
         file_item = self.env.container.file(source_filename)
@@ -1073,6 +1192,52 @@ class TestFile(Base):
                               hdrs={'X-Copy-From': '%s%s/%s' %
                               (prefix,
                                self.env.container.name, source_filename)})
+            self.assert_status(404)
+
+    def testCopyFromAccountHeader404s(self):
+        acct = self.env.conn2.account_name
+        src_cont = self.env.account2.container(Utils.create_name())
+        self.assert_(src_cont.create(hdrs={
+            'X-Container-Read': self.env.conn.user_acl
+        }))
+        source_filename = Utils.create_name()
+        file_item = src_cont.file(source_filename)
+        file_item.write_random()
+        dest_cont = self.env.account.container(Utils.create_name())
+        self.assert_(dest_cont.create())
+
+        for prefix in ('', '/'):
+            # invalid source container
+            file_item = dest_cont.file(Utils.create_name())
+            self.assertRaises(ResponseError, file_item.write,
+                              hdrs={'X-Copy-From-Account': acct,
+                                    'X-Copy-From': '%s%s/%s' %
+                                                   (prefix,
+                                                    Utils.create_name(),
+                                                    source_filename)})
+            # looks like cached responses leak "not found"
+            # to un-authorized users, not going to fix it now, but...
+            self.assert_status([403, 404])
+
+            # invalid source object
+            file_item = self.env.container.file(Utils.create_name())
+            self.assertRaises(ResponseError, file_item.write,
+                              hdrs={'X-Copy-From-Account': acct,
+                                    'X-Copy-From': '%s%s/%s' %
+                                                   (prefix,
+                                                    src_cont,
+                                                    Utils.create_name())})
+            self.assert_status(404)
+
+            # invalid destination container
+            dest_cont = self.env.account.container(Utils.create_name())
+            file_item = dest_cont.file(Utils.create_name())
+            self.assertRaises(ResponseError, file_item.write,
+                              hdrs={'X-Copy-From-Account': acct,
+                                    'X-Copy-From': '%s%s/%s' %
+                                                   (prefix,
+                                                    src_cont,
+                                                    source_filename)})
             self.assert_status(404)
 
     def testNameLimit(self):
@@ -1191,7 +1356,12 @@ class TestFile(Base):
         self.assertEqual(file_types, file_types_read)
 
     def testRangedGets(self):
-        file_length = 10000
+        # We set the file_length to a strange multiple here. This is to check
+        # that ranges still work in the EC case when the requested range
+        # spans EC segment boundaries. The 1 MiB base value is chosen because
+        # that's a common EC segment size. The 1.33 multiple is to ensure we
+        # aren't aligned on segment boundaries
+        file_length = int(1048576 * 1.33)
         range_size = file_length / 10
         file_item = self.env.container.file(Utils.create_name())
         data = file_item.write_random(file_length)
@@ -1254,6 +1424,15 @@ class TestFile(Base):
         limit = load_constraint('max_file_size')
         tsecs = 3
 
+        def timeout(seconds, method, *args, **kwargs):
+            try:
+                with eventlet.Timeout(seconds):
+                    method(*args, **kwargs)
+            except eventlet.Timeout:
+                return True
+            else:
+                return False
+
         for i in (limit - 100, limit - 10, limit - 1, limit, limit + 1,
                   limit + 10, limit + 100):
 
@@ -1294,6 +1473,16 @@ class TestFile(Base):
                           hdrs={'Content-Length': 'X'},
                           cfg={'no_content_length': True})
         self.assert_status(400)
+
+        # no content-length
+        self.assertRaises(ResponseError, file_item.write_random, file_length,
+                          cfg={'no_content_length': True})
+        self.assert_status(411)
+
+        self.assertRaises(ResponseError, file_item.write_random, file_length,
+                          hdrs={'transfer-encoding': 'gzip,chunked'},
+                          cfg={'no_content_length': True})
+        self.assert_status(501)
 
         # bad request types
         #for req in ('LICK', 'GETorHEAD_base', 'container_info',
@@ -1565,8 +1754,16 @@ class TestFile(Base):
         self.assertEqual(etag, header_etag)
 
     def testChunkedPut(self):
-        if (web_front_end == 'apache2'):
-            raise SkipTest()
+        if (tf.web_front_end == 'apache2'):
+            raise SkipTest("Chunked PUT can only be tested with apache2 web"
+                           " front end")
+
+        def chunks(s, length=3):
+            i, j = 0, length
+            while i < len(s):
+                yield s[i:j]
+                i, j = j, j + length
+
         data = File.random_data(10000)
         etag = File.compute_md5sum(data)
 
@@ -1590,10 +1787,10 @@ class TestFileUTF8(Base2, TestFile):
 class TestDloEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1657,6 +1854,9 @@ class TestDlo(Base):
         file_item = self.env.container.file('man1')
         file_contents = file_item.read(parms={'multipart-manifest': 'get'})
         self.assertEqual(file_contents, "man1-contents")
+        self.assertEqual(file_item.info()['x_object_manifest'],
+                         "%s/%s/seg_lower" %
+                         (self.env.container.name, self.env.segment_prefix))
 
     def test_get_range(self):
         file_item = self.env.container.file('man1')
@@ -1691,9 +1891,38 @@ class TestDlo(Base):
         self.assertEqual(
             file_contents,
             "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff")
+        # The copied object must not have X-Object-Manifest
+        self.assertTrue("x_object_manifest" not in file_item.info())
+
+    def test_copy_account(self):
+        # dlo use same account and same container only
+        acct = self.env.conn.account_name
+        # Adding a new segment, copying the manifest, and then deleting the
+        # segment proves that the new object is really the concatenated
+        # segments and not just a manifest.
+        f_segment = self.env.container.file("%s/seg_lowerf" %
+                                            (self.env.segment_prefix))
+        f_segment.write('ffffffffff')
+        try:
+            man1_item = self.env.container.file('man1')
+            man1_item.copy_account(acct,
+                                   self.env.container.name,
+                                   "copied-man1")
+        finally:
+            # try not to leave this around for other tests to stumble over
+            f_segment.delete()
+
+        file_item = self.env.container.file('copied-man1')
+        file_contents = file_item.read()
+        self.assertEqual(
+            file_contents,
+            "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffff")
+        # The copied object must not have X-Object-Manifest
+        self.assertTrue("x_object_manifest" not in file_item.info())
 
     def test_copy_manifest(self):
-        # Copying the manifest should result in another manifest
+        # Copying the manifest with multipart-manifest=get query string
+        # should result in another manifest
         try:
             man1_item = self.env.container.file('man1')
             man1_item.copy(self.env.container.name, "copied-man1",
@@ -1707,9 +1936,56 @@ class TestDlo(Base):
             self.assertEqual(
                 copied_contents,
                 "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeee")
+            self.assertEqual(man1_item.info()['x_object_manifest'],
+                             copied.info()['x_object_manifest'])
         finally:
             # try not to leave this around for other tests to stumble over
             self.env.container.file("copied-man1").delete()
+
+    def test_dlo_if_match_get(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.read(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_dlo_if_none_match_get(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.read(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
+    def test_dlo_if_match_head(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.info(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_dlo_if_none_match_head(self):
+        manifest = self.env.container.file("man1")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.info(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
 
 class TestDloUTF8(Base2, TestDlo):
     set_up = False
@@ -1718,10 +1994,10 @@ class TestDloUTF8(Base2, TestDlo):
 class TestFileComparisonEnv(object):
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1773,18 +2049,24 @@ class TestFileComparison(Base):
         for file_item in self.env.files:
             hdrs = {'If-Modified-Since': self.env.time_old_f1}
             self.assert_(file_item.read(hdrs=hdrs))
+            self.assert_(file_item.info(hdrs=hdrs))
 
             hdrs = {'If-Modified-Since': self.env.time_new}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
+            self.assert_status(304)
+            self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(304)
 
     def testIfUnmodifiedSince(self):
         for file_item in self.env.files:
             hdrs = {'If-Unmodified-Since': self.env.time_new}
             self.assert_(file_item.read(hdrs=hdrs))
+            self.assert_(file_item.info(hdrs=hdrs))
 
             hdrs = {'If-Unmodified-Since': self.env.time_old_f2}
             self.assertRaises(ResponseError, file_item.read, hdrs=hdrs)
+            self.assert_status(412)
+            self.assertRaises(ResponseError, file_item.info, hdrs=hdrs)
             self.assert_status(412)
 
     def testIfMatchAndUnmodified(self):
@@ -1835,17 +2117,24 @@ class TestSloEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
+        config2 = deepcopy(tf.config)
+        config2['account'] = tf.config['account2']
+        config2['username'] = tf.config['username2']
+        config2['password'] = tf.config['password2']
+        cls.conn2 = Connection(config2)
+        cls.conn2.authenticate()
+        cls.account2 = cls.conn2.get_account()
+        cls.account2.delete_containers()
 
         if cls.slo_enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.slo_enabled = 'slo' in cluster_info
             if not cls.slo_enabled:
                 return
 
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
         cls.account.delete_containers()
 
         cls.container = cls.account.container(Utils.create_name())
@@ -1911,7 +2200,7 @@ class TestSlo(Base):
     set_up = False
 
     def setUp(self):
-        raise SkipTest("SLO not enabled yet in gluster-swift")
+	raise SkipTest("SLO not enabled yet in gluster-swift")
         super(TestSlo, self).setUp()
         if self.env.slo_enabled is False:
             raise SkipTest("SLO not enabled")
@@ -2021,12 +2310,69 @@ class TestSlo(Base):
         copied_contents = copied.read(parms={'multipart-manifest': 'get'})
         self.assertEqual(4 * 1024 * 1024 + 1, len(copied_contents))
 
+    def test_slo_copy_account(self):
+        acct = self.env.conn.account_name
+        # same account copy
+        file_item = self.env.container.file("manifest-abcde")
+        file_item.copy_account(acct, self.env.container.name, "copied-abcde")
+
+        copied = self.env.container.file("copied-abcde")
+        copied_contents = copied.read(parms={'multipart-manifest': 'get'})
+        self.assertEqual(4 * 1024 * 1024 + 1, len(copied_contents))
+
+        # copy to different account
+        acct = self.env.conn2.account_name
+        dest_cont = self.env.account2.container(Utils.create_name())
+        self.assert_(dest_cont.create(hdrs={
+            'X-Container-Write': self.env.conn.user_acl
+        }))
+        file_item = self.env.container.file("manifest-abcde")
+        file_item.copy_account(acct, dest_cont, "copied-abcde")
+
+        copied = dest_cont.file("copied-abcde")
+        copied_contents = copied.read(parms={'multipart-manifest': 'get'})
+        self.assertEqual(4 * 1024 * 1024 + 1, len(copied_contents))
+
     def test_slo_copy_the_manifest(self):
         file_item = self.env.container.file("manifest-abcde")
         file_item.copy(self.env.container.name, "copied-abcde-manifest-only",
                        parms={'multipart-manifest': 'get'})
 
         copied = self.env.container.file("copied-abcde-manifest-only")
+        copied_contents = copied.read(parms={'multipart-manifest': 'get'})
+        try:
+            json.loads(copied_contents)
+        except ValueError:
+            self.fail("COPY didn't copy the manifest (invalid json on GET)")
+
+    def test_slo_copy_the_manifest_account(self):
+        acct = self.env.conn.account_name
+        # same account
+        file_item = self.env.container.file("manifest-abcde")
+        file_item.copy_account(acct,
+                               self.env.container.name,
+                               "copied-abcde-manifest-only",
+                               parms={'multipart-manifest': 'get'})
+
+        copied = self.env.container.file("copied-abcde-manifest-only")
+        copied_contents = copied.read(parms={'multipart-manifest': 'get'})
+        try:
+            json.loads(copied_contents)
+        except ValueError:
+            self.fail("COPY didn't copy the manifest (invalid json on GET)")
+
+        # different account
+        acct = self.env.conn2.account_name
+        dest_cont = self.env.account2.container(Utils.create_name())
+        self.assert_(dest_cont.create(hdrs={
+            'X-Container-Write': self.env.conn.user_acl
+        }))
+        file_item.copy_account(acct,
+                               dest_cont,
+                               "copied-abcde-manifest-only",
+                               parms={'multipart-manifest': 'get'})
+
+        copied = dest_cont.file("copied-abcde-manifest-only")
         copied_contents = copied.read(parms={'multipart-manifest': 'get'})
         try:
             json.loads(copied_contents)
@@ -2051,6 +2397,50 @@ class TestSlo(Base):
         self.assertEqual('application/json; charset=utf-8',
                          got_info['content_type'])
 
+    def test_slo_if_match_get(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.read(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_slo_if_none_match_get(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.read,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.read(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
+    def test_slo_if_match_head(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-Match': 'not-%s' % etag})
+        self.assert_status(412)
+
+        manifest.info(hdrs={'If-Match': etag})
+        self.assert_status(200)
+
+    def test_slo_if_none_match_head(self):
+        manifest = self.env.container.file("manifest-abcde")
+        etag = manifest.info()['etag']
+
+        self.assertRaises(ResponseError, manifest.info,
+                          hdrs={'If-None-Match': etag})
+        self.assert_status(304)
+
+        manifest.info(hdrs={'If-None-Match': "not-%s" % etag})
+        self.assert_status(200)
+
 
 class TestSloUTF8(Base2, TestSlo):
     set_up = False
@@ -2061,11 +2451,19 @@ class TestObjectVersioningEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
-        cls.account = Account(cls.conn, config.get('account',
-                                                   config['username']))
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
+
+        # Second connection for ACL tests
+        config2 = deepcopy(tf.config)
+        config2['account'] = tf.config['account2']
+        config2['username'] = tf.config['username2']
+        config2['password'] = tf.config['password2']
+        cls.conn2 = Connection(config2)
+        cls.conn2.authenticate()
 
         # avoid getting a prefix that stops halfway through an encoded
         # character
@@ -2078,6 +2476,69 @@ class TestObjectVersioningEnv(object):
         cls.container = cls.account.container(prefix + "-objs")
         if not cls.container.create(
                 hdrs={'X-Versions-Location': cls.versions_container.name}):
+            raise ResponseError(cls.conn.response)
+
+        container_info = cls.container.info()
+        # if versioning is off, then X-Versions-Location won't persist
+        cls.versioning_enabled = 'versions' in container_info
+
+
+class TestCrossPolicyObjectVersioningEnv(object):
+    # tri-state: None initially, then True/False
+    versioning_enabled = None
+    multiple_policies_enabled = None
+    policies = None
+
+    @classmethod
+    def setUp(cls):
+        cls.conn = Connection(tf.config)
+        cls.conn.authenticate()
+
+        if cls.multiple_policies_enabled is None:
+            try:
+                cls.policies = tf.FunctionalStoragePolicyCollection.from_info()
+            except AssertionError:
+                pass
+
+        if cls.policies and len(cls.policies) > 1:
+            cls.multiple_policies_enabled = True
+        else:
+            cls.multiple_policies_enabled = False
+            # We have to lie here that versioning is enabled. We actually
+            # don't know, but it does not matter. We know these tests cannot
+            # run without multiple policies present. If multiple policies are
+            # present, we won't be setting this field to any value, so it
+            # should all still work.
+            cls.versioning_enabled = True
+            return
+
+        policy = cls.policies.select()
+        version_policy = cls.policies.exclude(name=policy['name']).select()
+
+        cls.account = Account(cls.conn, tf.config.get('account',
+                                                      tf.config['username']))
+
+        # Second connection for ACL tests
+        config2 = deepcopy(tf.config)
+        config2['account'] = tf.config['account2']
+        config2['username'] = tf.config['username2']
+        config2['password'] = tf.config['password2']
+        cls.conn2 = Connection(config2)
+        cls.conn2.authenticate()
+
+        # avoid getting a prefix that stops halfway through an encoded
+        # character
+        prefix = Utils.create_name().decode("utf-8")[:10].encode("utf-8")
+
+        cls.versions_container = cls.account.container(prefix + "-versions")
+        if not cls.versions_container.create(
+                {'X-Storage-Policy': policy['name']}):
+            raise ResponseError(cls.conn.response)
+
+        cls.container = cls.account.container(prefix + "-objs")
+        if not cls.container.create(
+                hdrs={'X-Versions-Location': cls.versions_container.name,
+                      'X-Storage-Policy': version_policy['name']}):
             raise ResponseError(cls.conn.response)
 
         container_info = cls.container.info()
@@ -2098,6 +2559,15 @@ class TestObjectVersioning(Base):
             raise Exception(
                 "Expected versioning_enabled to be True/False, got %r" %
                 (self.env.versioning_enabled,))
+
+    def tearDown(self):
+        super(TestObjectVersioning, self).tearDown()
+        try:
+            # delete versions first!
+            self.env.versions_container.delete_files()
+            self.env.container.delete_files()
+        except ResponseError:
+            pass
 
     def test_overwriting(self):
         container = self.env.container
@@ -2130,9 +2600,80 @@ class TestObjectVersioning(Base):
         versioned_obj.delete()
         self.assertRaises(ResponseError, versioned_obj.read)
 
+    def test_versioning_dlo(self):
+        raise SkipTest('SOF incompatible test')
+        container = self.env.container
+        versions_container = self.env.versions_container
+        obj_name = Utils.create_name()
+
+        for i in ('1', '2', '3'):
+            time.sleep(.01)  # guarantee that the timestamp changes
+            obj_name_seg = obj_name + '/' + i
+            versioned_obj = container.file(obj_name_seg)
+            versioned_obj.write(i)
+            versioned_obj.write(i + i)
+
+        self.assertEqual(3, versions_container.info()['object_count'])
+
+        man_file = container.file(obj_name)
+        man_file.write('', hdrs={"X-Object-Manifest": "%s/%s/" %
+                       (self.env.container.name, obj_name)})
+
+        # guarantee that the timestamp changes
+        time.sleep(.01)
+
+        # write manifest file again
+        man_file.write('', hdrs={"X-Object-Manifest": "%s/%s/" %
+                       (self.env.container.name, obj_name)})
+
+        self.assertEqual(3, versions_container.info()['object_count'])
+        self.assertEqual("112233", man_file.read())
+
+    def test_versioning_check_acl(self):
+        container = self.env.container
+        versions_container = self.env.versions_container
+        versions_container.create(hdrs={'X-Container-Read': '.r:*,.rlistings'})
+
+        obj_name = Utils.create_name()
+        versioned_obj = container.file(obj_name)
+        versioned_obj.write("aaaaa")
+        self.assertEqual("aaaaa", versioned_obj.read())
+
+        versioned_obj.write("bbbbb")
+        self.assertEqual("bbbbb", versioned_obj.read())
+
+        # Use token from second account and try to delete the object
+        org_token = self.env.account.conn.storage_token
+        self.env.account.conn.storage_token = self.env.conn2.storage_token
+        try:
+            self.assertRaises(ResponseError, versioned_obj.delete)
+        finally:
+            self.env.account.conn.storage_token = org_token
+
+        # Verify with token from first account
+        self.assertEqual("bbbbb", versioned_obj.read())
+
+        versioned_obj.delete()
+        self.assertEqual("aaaaa", versioned_obj.read())
+
 
 class TestObjectVersioningUTF8(Base2, TestObjectVersioning):
     set_up = False
+
+
+class TestCrossPolicyObjectVersioning(TestObjectVersioning):
+    env = TestCrossPolicyObjectVersioningEnv
+    set_up = False
+
+    def setUp(self):
+        super(TestCrossPolicyObjectVersioning, self).setUp()
+        if self.env.multiple_policies_enabled is False:
+            raise SkipTest('Cross policy test requires multiple policies')
+        elif self.env.multiple_policies_enabled is not True:
+            # just some sanity checking
+            raise Exception("Expected multiple_policies_enabled "
+                            "to be True/False, got %r" % (
+                                self.env.versioning_enabled,))
 
 
 class TestTempurlEnv(object):
@@ -2140,21 +2681,19 @@ class TestTempurlEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
         if cls.tempurl_enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.tempurl_enabled = 'tempurl' in cluster_info
             if not cls.tempurl_enabled:
                 return
-            cls.tempurl_methods = cluster_info['tempurl']['methods']
 
         cls.tempurl_key = Utils.create_name()
         cls.tempurl_key2 = Utils.create_name()
 
         cls.account = Account(
-            cls.conn, config.get('account', config['username']))
+            cls.conn, tf.config.get('account', tf.config['username']))
         cls.account.delete_containers()
         cls.account.update_metadata({
             'temp-url-key': cls.tempurl_key,
@@ -2177,6 +2716,279 @@ class TestTempurl(Base):
 
     def setUp(self):
         super(TestTempurl, self).setUp()
+        if self.env.tempurl_enabled is False:
+            raise SkipTest("TempURL not enabled")
+        elif self.env.tempurl_enabled is not True:
+            # just some sanity checking
+            raise Exception(
+                "Expected tempurl_enabled to be True/False, got %r" %
+                (self.env.tempurl_enabled,))
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(self.env.obj.path),
+            self.env.tempurl_key)
+        self.obj_tempurl_parms = {'temp_url_sig': sig,
+                                  'temp_url_expires': str(expires)}
+
+    def tempurl_sig(self, method, expires, path, key):
+        return hmac.new(
+            key,
+            '%s\n%s\n%s' % (method, expires, urllib.unquote(path)),
+            hashlib.sha1).hexdigest()
+
+    def test_GET(self):
+        contents = self.env.obj.read(
+            parms=self.obj_tempurl_parms,
+            cfg={'no_auth_token': True})
+        self.assertEqual(contents, "obj contents")
+
+        # GET tempurls also allow HEAD requests
+        self.assert_(self.env.obj.info(parms=self.obj_tempurl_parms,
+                                       cfg={'no_auth_token': True}))
+
+    def test_GET_with_key_2(self):
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(self.env.obj.path),
+            self.env.tempurl_key2)
+        parms = {'temp_url_sig': sig,
+                 'temp_url_expires': str(expires)}
+
+        contents = self.env.obj.read(parms=parms, cfg={'no_auth_token': True})
+        self.assertEqual(contents, "obj contents")
+
+    def test_GET_DLO_inside_container(self):
+        seg1 = self.env.container.file(
+            "get-dlo-inside-seg1" + Utils.create_name())
+        seg2 = self.env.container.file(
+            "get-dlo-inside-seg2" + Utils.create_name())
+        seg1.write("one fish two fish ")
+        seg2.write("red fish blue fish")
+
+        manifest = self.env.container.file("manifest" + Utils.create_name())
+        manifest.write(
+            '',
+            hdrs={"X-Object-Manifest": "%s/get-dlo-inside-seg" %
+                  (self.env.container.name,)})
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(manifest.path),
+            self.env.tempurl_key)
+        parms = {'temp_url_sig': sig,
+                 'temp_url_expires': str(expires)}
+
+        contents = manifest.read(parms=parms, cfg={'no_auth_token': True})
+        self.assertEqual(contents, "one fish two fish red fish blue fish")
+
+    def test_GET_DLO_outside_container(self):
+        seg1 = self.env.container.file(
+            "get-dlo-outside-seg1" + Utils.create_name())
+        seg2 = self.env.container.file(
+            "get-dlo-outside-seg2" + Utils.create_name())
+        seg1.write("one fish two fish ")
+        seg2.write("red fish blue fish")
+
+        container2 = self.env.account.container(Utils.create_name())
+        container2.create()
+
+        manifest = container2.file("manifest" + Utils.create_name())
+        manifest.write(
+            '',
+            hdrs={"X-Object-Manifest": "%s/get-dlo-outside-seg" %
+                  (self.env.container.name,)})
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(manifest.path),
+            self.env.tempurl_key)
+        parms = {'temp_url_sig': sig,
+                 'temp_url_expires': str(expires)}
+
+        # cross container tempurl works fine for account tempurl key
+        contents = manifest.read(parms=parms, cfg={'no_auth_token': True})
+        self.assertEqual(contents, "one fish two fish red fish blue fish")
+        self.assert_status([200])
+
+    def test_PUT(self):
+        new_obj = self.env.container.file(Utils.create_name())
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'PUT', expires, self.env.conn.make_path(new_obj.path),
+            self.env.tempurl_key)
+        put_parms = {'temp_url_sig': sig,
+                     'temp_url_expires': str(expires)}
+
+        new_obj.write('new obj contents',
+                      parms=put_parms, cfg={'no_auth_token': True})
+        self.assertEqual(new_obj.read(), "new obj contents")
+
+        # PUT tempurls also allow HEAD requests
+        self.assert_(new_obj.info(parms=put_parms,
+                                  cfg={'no_auth_token': True}))
+
+    def test_PUT_manifest_access(self):
+        new_obj = self.env.container.file(Utils.create_name())
+
+        # give out a signature which allows a PUT to new_obj
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'PUT', expires, self.env.conn.make_path(new_obj.path),
+            self.env.tempurl_key)
+        put_parms = {'temp_url_sig': sig,
+                     'temp_url_expires': str(expires)}
+
+        # try to create manifest pointing to some random container
+        try:
+            new_obj.write('', {
+                'x-object-manifest': '%s/foo' % 'some_random_container'
+            }, parms=put_parms, cfg={'no_auth_token': True})
+        except ResponseError as e:
+            self.assertEqual(e.status, 400)
+        else:
+            self.fail('request did not error')
+
+        # create some other container
+        other_container = self.env.account.container(Utils.create_name())
+        if not other_container.create():
+            raise ResponseError(self.conn.response)
+
+        # try to create manifest pointing to new container
+        try:
+            new_obj.write('', {
+                'x-object-manifest': '%s/foo' % other_container
+            }, parms=put_parms, cfg={'no_auth_token': True})
+        except ResponseError as e:
+            self.assertEqual(e.status, 400)
+        else:
+            self.fail('request did not error')
+
+    def test_HEAD(self):
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'HEAD', expires, self.env.conn.make_path(self.env.obj.path),
+            self.env.tempurl_key)
+        head_parms = {'temp_url_sig': sig,
+                      'temp_url_expires': str(expires)}
+
+        self.assert_(self.env.obj.info(parms=head_parms,
+                                       cfg={'no_auth_token': True}))
+        # HEAD tempurls don't allow PUT or GET requests, despite the fact that
+        # PUT and GET tempurls both allow HEAD requests
+        self.assertRaises(ResponseError, self.env.other_obj.read,
+                          cfg={'no_auth_token': True},
+                          parms=self.obj_tempurl_parms)
+        self.assert_status([401])
+
+        self.assertRaises(ResponseError, self.env.other_obj.write,
+                          'new contents',
+                          cfg={'no_auth_token': True},
+                          parms=self.obj_tempurl_parms)
+        self.assert_status([401])
+
+    def test_different_object(self):
+        contents = self.env.obj.read(
+            parms=self.obj_tempurl_parms,
+            cfg={'no_auth_token': True})
+        self.assertEqual(contents, "obj contents")
+
+        self.assertRaises(ResponseError, self.env.other_obj.read,
+                          cfg={'no_auth_token': True},
+                          parms=self.obj_tempurl_parms)
+        self.assert_status([401])
+
+    def test_changing_sig(self):
+        contents = self.env.obj.read(
+            parms=self.obj_tempurl_parms,
+            cfg={'no_auth_token': True})
+        self.assertEqual(contents, "obj contents")
+
+        parms = self.obj_tempurl_parms.copy()
+        if parms['temp_url_sig'][0] == 'a':
+            parms['temp_url_sig'] = 'b' + parms['temp_url_sig'][1:]
+        else:
+            parms['temp_url_sig'] = 'a' + parms['temp_url_sig'][1:]
+
+        self.assertRaises(ResponseError, self.env.obj.read,
+                          cfg={'no_auth_token': True},
+                          parms=parms)
+        self.assert_status([401])
+
+    def test_changing_expires(self):
+        contents = self.env.obj.read(
+            parms=self.obj_tempurl_parms,
+            cfg={'no_auth_token': True})
+        self.assertEqual(contents, "obj contents")
+
+        parms = self.obj_tempurl_parms.copy()
+        if parms['temp_url_expires'][-1] == '0':
+            parms['temp_url_expires'] = parms['temp_url_expires'][:-1] + '1'
+        else:
+            parms['temp_url_expires'] = parms['temp_url_expires'][:-1] + '0'
+
+        self.assertRaises(ResponseError, self.env.obj.read,
+                          cfg={'no_auth_token': True},
+                          parms=parms)
+        self.assert_status([401])
+
+
+class TestTempurlUTF8(Base2, TestTempurl):
+    set_up = False
+
+
+class TestContainerTempurlEnv(object):
+    tempurl_enabled = None  # tri-state: None initially, then True/False
+
+    @classmethod
+    def setUp(cls):
+        cls.conn = Connection(tf.config)
+        cls.conn.authenticate()
+
+        if cls.tempurl_enabled is None:
+            cls.tempurl_enabled = 'tempurl' in cluster_info
+            if not cls.tempurl_enabled:
+                return
+
+        cls.tempurl_key = Utils.create_name()
+        cls.tempurl_key2 = Utils.create_name()
+
+        cls.account = Account(
+            cls.conn, tf.config.get('account', tf.config['username']))
+        cls.account.delete_containers()
+
+        # creating another account and connection
+        # for ACL tests
+        config2 = deepcopy(tf.config)
+        config2['account'] = tf.config['account2']
+        config2['username'] = tf.config['username2']
+        config2['password'] = tf.config['password2']
+        cls.conn2 = Connection(config2)
+        cls.conn2.authenticate()
+        cls.account2 = Account(
+            cls.conn2, config2.get('account', config2['username']))
+        cls.account2 = cls.conn2.get_account()
+
+        cls.container = cls.account.container(Utils.create_name())
+        if not cls.container.create({
+                'x-container-meta-temp-url-key': cls.tempurl_key,
+                'x-container-meta-temp-url-key-2': cls.tempurl_key2,
+                'x-container-read': cls.account2.name}):
+            raise ResponseError(cls.conn.response)
+
+        cls.obj = cls.container.file(Utils.create_name())
+        cls.obj.write("obj contents")
+        cls.other_obj = cls.container.file(Utils.create_name())
+        cls.other_obj.write("other obj contents")
+
+
+class TestContainerTempurl(Base):
+    env = TestContainerTempurlEnv
+    set_up = False
+
+    def setUp(self):
+        super(TestContainerTempurl, self).setUp()
         if self.env.tempurl_enabled is False:
             raise SkipTest("TempURL not enabled")
         elif self.env.tempurl_enabled is not True:
@@ -2305,8 +3117,91 @@ class TestTempurl(Base):
                           parms=parms)
         self.assert_status([401])
 
+    def test_tempurl_keys_visible_to_account_owner(self):
+        if not tf.cluster_info.get('tempauth'):
+            raise SkipTest('TEMP AUTH SPECIFIC TEST')
+        metadata = self.env.container.info()
+        self.assertEqual(metadata.get('tempurl_key'), self.env.tempurl_key)
+        self.assertEqual(metadata.get('tempurl_key2'), self.env.tempurl_key2)
 
-class TestTempurlUTF8(Base2, TestTempurl):
+    def test_tempurl_keys_hidden_from_acl_readonly(self):
+        if not tf.cluster_info.get('tempauth'):
+            raise SkipTest('TEMP AUTH SPECIFIC TEST')
+        original_token = self.env.container.conn.storage_token
+        self.env.container.conn.storage_token = self.env.conn2.storage_token
+        metadata = self.env.container.info()
+        self.env.container.conn.storage_token = original_token
+
+        self.assertTrue('tempurl_key' not in metadata,
+                        'Container TempURL key found, should not be visible '
+                        'to readonly ACLs')
+        self.assertTrue('tempurl_key2' not in metadata,
+                        'Container TempURL key-2 found, should not be visible '
+                        'to readonly ACLs')
+
+    def test_GET_DLO_inside_container(self):
+        seg1 = self.env.container.file(
+            "get-dlo-inside-seg1" + Utils.create_name())
+        seg2 = self.env.container.file(
+            "get-dlo-inside-seg2" + Utils.create_name())
+        seg1.write("one fish two fish ")
+        seg2.write("red fish blue fish")
+
+        manifest = self.env.container.file("manifest" + Utils.create_name())
+        manifest.write(
+            '',
+            hdrs={"X-Object-Manifest": "%s/get-dlo-inside-seg" %
+                  (self.env.container.name,)})
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(manifest.path),
+            self.env.tempurl_key)
+        parms = {'temp_url_sig': sig,
+                 'temp_url_expires': str(expires)}
+
+        contents = manifest.read(parms=parms, cfg={'no_auth_token': True})
+        self.assertEqual(contents, "one fish two fish red fish blue fish")
+
+    def test_GET_DLO_outside_container(self):
+        container2 = self.env.account.container(Utils.create_name())
+        container2.create()
+        seg1 = container2.file(
+            "get-dlo-outside-seg1" + Utils.create_name())
+        seg2 = container2.file(
+            "get-dlo-outside-seg2" + Utils.create_name())
+        seg1.write("one fish two fish ")
+        seg2.write("red fish blue fish")
+
+        manifest = self.env.container.file("manifest" + Utils.create_name())
+        manifest.write(
+            '',
+            hdrs={"X-Object-Manifest": "%s/get-dlo-outside-seg" %
+                  (container2.name,)})
+
+        expires = int(time.time()) + 86400
+        sig = self.tempurl_sig(
+            'GET', expires, self.env.conn.make_path(manifest.path),
+            self.env.tempurl_key)
+        parms = {'temp_url_sig': sig,
+                 'temp_url_expires': str(expires)}
+
+        # cross container tempurl does not work for container tempurl key
+        try:
+            manifest.read(parms=parms, cfg={'no_auth_token': True})
+        except ResponseError as e:
+            self.assertEqual(e.status, 401)
+        else:
+            self.fail('request did not error')
+        try:
+            manifest.info(parms=parms, cfg={'no_auth_token': True})
+        except ResponseError as e:
+            self.assertEqual(e.status, 401)
+        else:
+            self.fail('request did not error')
+
+
+class TestContainerTempurlUTF8(Base2, TestContainerTempurl):
     set_up = False
 
 
@@ -2315,17 +3210,16 @@ class TestSloTempurlEnv(object):
 
     @classmethod
     def setUp(cls):
-        cls.conn = Connection(config)
+        cls.conn = Connection(tf.config)
         cls.conn.authenticate()
 
         if cls.enabled is None:
-            cluster_info = cls.conn.cluster_info()
             cls.enabled = 'tempurl' in cluster_info and 'slo' in cluster_info
 
         cls.tempurl_key = Utils.create_name()
 
         cls.account = Account(
-            cls.conn, config.get('account', config['username']))
+            cls.conn, tf.config.get('account', tf.config['username']))
         cls.account.delete_containers()
         cls.account.update_metadata({'temp-url-key': cls.tempurl_key})
 
@@ -2396,6 +3290,175 @@ class TestSloTempurl(Base):
 
 class TestSloTempurlUTF8(Base2, TestSloTempurl):
     set_up = False
+
+
+class TestServiceToken(unittest.TestCase):
+
+    def setUp(self):
+        if tf.skip_service_tokens:
+            raise SkipTest
+
+        self.SET_TO_USERS_TOKEN = 1
+        self.SET_TO_SERVICE_TOKEN = 2
+
+        # keystoneauth and tempauth differ in allowing PUT account
+        # Even if keystoneauth allows it, the proxy-server uses
+        # allow_account_management to decide if accounts can be created
+        self.put_account_expect = is_client_error
+        if tf.swift_test_auth_version != '1':
+            if cluster_info.get('swift').get('allow_account_management'):
+                self.put_account_expect = is_success
+
+    def _scenario_generator(self):
+        paths = ((None, None), ('c', None), ('c', 'o'))
+        for path in paths:
+            for method in ('PUT', 'POST', 'HEAD', 'GET', 'OPTIONS'):
+                yield method, path[0], path[1]
+        for path in reversed(paths):
+            yield 'DELETE', path[0], path[1]
+
+    def _assert_is_authed_response(self, method, container, object, resp):
+        resp.read()
+        expect = is_success
+        if method == 'DELETE' and not container:
+            expect = is_client_error
+        if method == 'PUT' and not container:
+            expect = self.put_account_expect
+        self.assertTrue(expect(resp.status), 'Unexpected %s for %s %s %s'
+                        % (resp.status, method, container, object))
+
+    def _assert_not_authed_response(self, method, container, object, resp):
+        resp.read()
+        expect = is_client_error
+        if method == 'OPTIONS':
+            expect = is_success
+        self.assertTrue(expect(resp.status), 'Unexpected %s for %s %s %s'
+                        % (resp.status, method, container, object))
+
+    def prepare_request(self, method, use_service_account=False,
+                        container=None, obj=None, body=None, headers=None,
+                        x_auth_token=None,
+                        x_service_token=None, dbg=False):
+        """
+        Setup for making the request
+
+        When retry() calls the do_request() function, it calls it the
+        test user's token, the parsed path, a connection and (optionally)
+        a token from the test service user. We save options here so that
+        do_request() can make the appropriate request.
+
+        :param method: The operation (e.g'. 'HEAD')
+        :param use_service_account: Optional. Set True to change the path to
+               be the service account
+        :param container: Optional. Adds a container name to the path
+        :param obj: Optional. Adds an object name to the path
+        :param body: Optional. Adds a body (string) in the request
+        :param headers: Optional. Adds additional headers.
+        :param x_auth_token: Optional. Default is SET_TO_USERS_TOKEN. One of:
+                   SET_TO_USERS_TOKEN     Put the test user's token in
+                                          X-Auth-Token
+                   SET_TO_SERVICE_TOKEN   Put the service token in X-Auth-Token
+        :param x_service_token: Optional. Default is to not set X-Service-Token
+                   to any value. If specified, is one of following:
+                   SET_TO_USERS_TOKEN     Put the test user's token in
+                                          X-Service-Token
+                   SET_TO_SERVICE_TOKEN   Put the service token in
+                                          X-Service-Token
+        :param dbg: Optional. Set true to check request arguments
+        """
+        self.method = method
+        self.use_service_account = use_service_account
+        self.container = container
+        self.obj = obj
+        self.body = body
+        self.headers = headers
+        if x_auth_token:
+            self.x_auth_token = x_auth_token
+        else:
+            self.x_auth_token = self.SET_TO_USERS_TOKEN
+        self.x_service_token = x_service_token
+        self.dbg = dbg
+
+    def do_request(self, url, token, parsed, conn, service_token=''):
+            if self.use_service_account:
+                path = self._service_account(parsed.path)
+            else:
+                path = parsed.path
+            if self.container:
+                path += '/%s' % self.container
+            if self.obj:
+                path += '/%s' % self.obj
+            headers = {}
+            if self.body:
+                headers.update({'Content-Length': len(self.body)})
+            if self.headers:
+                headers.update(self.headers)
+            if self.x_auth_token == self.SET_TO_USERS_TOKEN:
+                headers.update({'X-Auth-Token': token})
+            elif self.x_auth_token == self.SET_TO_SERVICE_TOKEN:
+                headers.update({'X-Auth-Token': service_token})
+            if self.x_service_token == self.SET_TO_USERS_TOKEN:
+                headers.update({'X-Service-Token': token})
+            elif self.x_service_token == self.SET_TO_SERVICE_TOKEN:
+                headers.update({'X-Service-Token': service_token})
+            if self.dbg:
+                print('DEBUG: conn.request: method:%s path:%s'
+                      ' body:%s headers:%s' % (self.method, path, self.body,
+                                               headers))
+            conn.request(self.method, path, self.body, headers=headers)
+            return check_response(conn)
+
+    def _service_account(self, path):
+        parts = path.split('/', 3)
+        account = parts[2]
+        try:
+            project_id = account[account.index('_') + 1:]
+        except ValueError:
+            project_id = account
+        parts[2] = '%s%s' % (tf.swift_test_service_prefix, project_id)
+        return '/'.join(parts)
+
+    def test_user_access_own_auth_account(self):
+        # This covers ground tested elsewhere (tests a user doing HEAD
+        # on own account). However, if this fails, none of the remaining
+        # tests will work
+        self.prepare_request('HEAD')
+        resp = retry(self.do_request)
+        resp.read()
+        self.assert_(resp.status in (200, 204), resp.status)
+
+    def test_user_cannot_access_service_account(self):
+        for method, container, obj in self._scenario_generator():
+            self.prepare_request(method, use_service_account=True,
+                                 container=container, obj=obj)
+            resp = retry(self.do_request)
+            self._assert_not_authed_response(method, container, obj, resp)
+
+    def test_service_user_denied_with_x_auth_token(self):
+        for method, container, obj in self._scenario_generator():
+            self.prepare_request(method, use_service_account=True,
+                                 container=container, obj=obj,
+                                 x_auth_token=self.SET_TO_SERVICE_TOKEN)
+            resp = retry(self.do_request, service_user=5)
+            self._assert_not_authed_response(method, container, obj, resp)
+
+    def test_service_user_denied_with_x_service_token(self):
+        for method, container, obj in self._scenario_generator():
+            self.prepare_request(method, use_service_account=True,
+                                 container=container, obj=obj,
+                                 x_auth_token=self.SET_TO_SERVICE_TOKEN,
+                                 x_service_token=self.SET_TO_SERVICE_TOKEN)
+            resp = retry(self.do_request, service_user=5)
+            self._assert_not_authed_response(method, container, obj, resp)
+
+    def test_user_plus_service_can_access_service_account(self):
+        for method, container, obj in self._scenario_generator():
+            self.prepare_request(method, use_service_account=True,
+                                 container=container, obj=obj,
+                                 x_auth_token=self.SET_TO_USERS_TOKEN,
+                                 x_service_token=self.SET_TO_SERVICE_TOKEN)
+            resp = retry(self.do_request, service_user=5)
+            self._assert_is_authed_response(method, container, obj, resp)
 
 
 if __name__ == '__main__':

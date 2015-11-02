@@ -255,7 +255,7 @@ class DiskDir(DiskCommon):
     :param uid: user ID container object should assume
     :param gid: group ID container object should assume
 
-    Usage pattern from container/server.py (Havana, 1.8.0+):
+    Usage pattern from container/server.py (Kilo, 2.3.0):
         DELETE:
             if auto-create and obj and not .db_file:
                 # Creates container
@@ -287,36 +287,43 @@ class DiskDir(DiskCommon):
                     return 404
                 .put_object()
             else:
-                if not .db_file:
-                    # Creates container
-                    .initialize()
-                else:
-                    # Update container timestamp
-                    .is_deleted()
+                _update_or_create():
+                    if not .db_file:
+                        # Creates container
+                        .initialize()
+                    recreated = .is_deleted():
+                    if recreated:
+                        .set_storage_policy_index()
+                    .storage_policy_index
                     .update_put_timestamp()
                     if .is_deleted()
                         return conflict
-                if metadata:
+                    if recreated:
+                        .update_status_changed_at()
+
+                if 'X-Container-Sync-To' in metadata:
                     if .metadata
                         .set_x_container_sync_points()
                     .update_metadata()
                 account_update():
                     .get_info()
         HEAD:
-            .pending_timeout
-            .stale_reads_ok
-            if .is_deleted():
-                return 404
-            .get_info()
+            info, is_deleted = .get_info_is_deleted()
+            .get_info_is_deleted():
+                if not .db_file:
+                    return {}, True
+                info = .get_info()
+                return info, ._is_deleted_info()
             .metadata
         GET:
-            .pending_timeout
-            .stale_reads_ok
-            if .is_deleted():
-                return 404
-            .get_info()
-            .metadata
+            info, is_deleted = .get_info_is_deleted()
+            .get_info_is_deleted():
+                if not .db_file:
+                    return {}, True
+                info = .get_info()
+                return info, ._is_deleted_info()
             .list_objects_iter()
+            .metadata
         POST:
             if .is_deleted():
                 return 404
@@ -346,8 +353,22 @@ class DiskDir(DiskCommon):
                 create_container_metadata(self.datadir)
                 self.metadata = _read_metadata(self.datadir)
 
+    def update_status_changed_at(self, timestamp):
+        return
+
+    @property
+    def storage_policy_index(self):
+        if not hasattr(self, '_storage_policy_index'):
+            self._storage_policy_index = \
+                self.get_info()['storage_policy_index']
+        return self._storage_policy_index
+
+    def set_storage_policy_index(self, policy_index, timestamp=None):
+        self._storage_policy_index = policy_index
+
     def list_objects_iter(self, limit, marker, end_marker,
-                          prefix, delimiter, path=None):
+                          prefix, delimiter, path=None,
+                          storage_policy_index=0):
         """
         Returns tuple of name, created_at, size, content_type, etag.
         """
@@ -451,6 +472,12 @@ class DiskDir(DiskCommon):
 
         return objects
 
+    def get_info_is_deleted(self):
+        if not do_exists(self.datadir):
+            return {}, True
+        info = self.get_info()
+        return info, False
+
     def get_info(self):
         """
         Get global data for the container.
@@ -477,7 +504,10 @@ class DiskDir(DiskCommon):
                     'x_container_sync_point1', -1),
                 'x_container_sync_point2': self.metadata.get(
                     'x_container_sync_point2', -1),
+                'storage_policy_index': self.metadata.get(
+                    'storage_policy_index', 0)
                 }
+        self._storage_policy_index = data['storage_policy_index']
         return data
 
     def put_object(self, name, timestamp, size, content_type, etag, deleted=0):
@@ -540,13 +570,14 @@ class DiskDir(DiskCommon):
 
 class DiskAccount(DiskCommon):
     """
-    Usage pattern from account/server.py (Havana, 1.8.0+):
+    Usage pattern from account/server.py (Kilo, 2.3.0):
         DELETE:
             .is_deleted()
+            .is_status_deleted()
             .delete_db()
+            .is_status_deleted()
         PUT:
             container:
-                .pending_timeout
                 .db_file
                 .initialize()
                 .is_deleted()
@@ -555,25 +586,27 @@ class DiskAccount(DiskCommon):
                 .db_file
                 .initialize()
                 .is_status_deleted()
+                .is_status_deleted()
                 .is_deleted()
                 .update_put_timestamp()
-                .is_deleted() ???
+                .is_deleted()
                 .update_metadata()
         HEAD:
-            .pending_timeout
-            .stale_reads_ok
             .is_deleted()
+            .is_status_deleted()
             .get_info()
+            .get_policy_stats()
             .metadata
         GET:
-            .pending_timeout
-            .stale_reads_ok
             .is_deleted()
+            .is_status_deleted()
             .get_info()
+            .get_policy_stats()
             .metadata
             .list_containers_iter()
         POST:
             .is_deleted()
+            .is_status_deleted()
             .update_metadata()
     """
 
@@ -748,3 +781,6 @@ class DiskAccount(DiskCommon):
                 'bytes_used': self.metadata.get(X_BYTES_USED, (0, 0))[0],
                 'hash': '', 'id': ''}
         return data
+
+    def get_policy_stats(self, do_migrations=False):
+        return {}

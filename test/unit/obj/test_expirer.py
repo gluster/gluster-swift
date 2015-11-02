@@ -16,12 +16,14 @@
 import urllib
 from time import time
 from unittest import main, TestCase
-from test.unit import FakeLogger
+from test.unit import FakeRing, mocked_http_conn, debug_logger
 from copy import deepcopy
+from tempfile import mkdtemp
+from shutil import rmtree
 
 import mock
 
-from swift.common import internal_client
+from swift.common import internal_client, utils
 from swift.obj import expirer
 
 
@@ -39,6 +41,7 @@ def not_sleep(seconds):
 
 class TestObjectExpirer(TestCase):
     maxDiff = None
+    internal_client = None
 
     def setUp(self):
         global not_sleep
@@ -49,9 +52,14 @@ class TestObjectExpirer(TestCase):
         internal_client.loadapp = lambda *a, **kw: None
         internal_client.sleep = not_sleep
 
-    def teardown(self):
+        self.rcache = mkdtemp()
+        self.conf = {'recon_cache_path': self.rcache}
+        self.logger = debug_logger('test-recon')
+
+    def tearDown(self):
+        rmtree(self.rcache)
         internal_client.sleep = self.old_sleep
-        internal_client.loadapp = self.loadapp
+        internal_client.loadapp = self.old_loadapp
 
     def test_get_process_values_from_kwargs(self):
         x = expirer.ObjectExpirer({})
@@ -59,7 +67,9 @@ class TestObjectExpirer(TestCase):
             'processes': 5,
             'process': 1,
         }
-        self.assertEqual((5, 1), x.get_process_values(vals))
+        x.get_process_values(vals)
+        self.assertEqual(x.processes, 5)
+        self.assertEqual(x.process, 1)
 
     def test_get_process_values_from_config(self):
         vals = {
@@ -67,7 +77,9 @@ class TestObjectExpirer(TestCase):
             'process': 1,
         }
         x = expirer.ObjectExpirer(vals)
-        self.assertEqual((5, 1), x.get_process_values({}))
+        x.get_process_values({})
+        self.assertEqual(x.processes, 5)
+        self.assertEqual(x.process, 1)
 
     def test_get_process_values_negative_process(self):
         vals = {
@@ -123,11 +135,13 @@ class TestObjectExpirer(TestCase):
                 super(ObjectExpirer, self).__init__(conf)
                 self.processes = 3
                 self.deleted_objects = {}
+                self.obj_containers_in_order = []
 
             def delete_object(self, actual_obj, timestamp, container, obj):
                 if container not in self.deleted_objects:
                     self.deleted_objects[container] = set()
                 self.deleted_objects[container].add(obj)
+                self.obj_containers_in_order.append(container)
 
         class InternalClient(object):
 
@@ -139,21 +153,22 @@ class TestObjectExpirer(TestCase):
                     sum([len(self.containers[x]) for x in self.containers])
 
             def iter_containers(self, *a, **kw):
-                return [{'name': x} for x in self.containers.keys()]
+                return [{'name': unicode(x)} for x in self.containers.keys()]
 
             def iter_objects(self, account, container):
-                return [{'name': x} for x in self.containers[container]]
+                return [{'name': unicode(x)}
+                        for x in self.containers[container]]
 
             def delete_container(*a, **kw):
                 pass
 
         containers = {
-            0: set('1-one 2-two 3-three'.split()),
-            1: set('2-two 3-three 4-four'.split()),
-            2: set('5-five 6-six'.split()),
-            3: set('7-seven'.split()),
+            '0': set('1-one 2-two 3-three'.split()),
+            '1': set('2-two 3-three 4-four'.split()),
+            '2': set('5-five 6-six'.split()),
+            '3': set(u'7-seven\u2661'.split()),
         }
-        x = ObjectExpirer({})
+        x = ObjectExpirer(self.conf)
         x.swift = InternalClient(containers)
 
         deleted_objects = {}
@@ -162,22 +177,22 @@ class TestObjectExpirer(TestCase):
             x.run_once()
             self.assertNotEqual(deleted_objects, x.deleted_objects)
             deleted_objects = deepcopy(x.deleted_objects)
+        self.assertEqual(containers['3'].pop(),
+                         deleted_objects['3'].pop().decode('utf8'))
         self.assertEqual(containers, deleted_objects)
+        self.assertEqual(len(set(x.obj_containers_in_order[:4])), 4)
 
     def test_delete_object(self):
         class InternalClient(object):
+
+            container_ring = None
+
             def __init__(self, test, account, container, obj):
                 self.test = test
                 self.account = account
                 self.container = container
                 self.obj = obj
                 self.delete_object_called = False
-
-            def delete_object(self, account, container, obj):
-                self.test.assertEqual(self.account, account)
-                self.test.assertEqual(self.container, container)
-                self.test.assertEqual(self.obj, obj)
-                self.delete_object_called = True
 
         class DeleteActualObject(object):
             def __init__(self, test, actual_obj, timestamp):
@@ -196,48 +211,55 @@ class TestObjectExpirer(TestCase):
         actual_obj = 'actual_obj'
         timestamp = 'timestamp'
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer({}, logger=self.logger)
         x.swift = \
             InternalClient(self, x.expiring_objects_account, container, obj)
         x.delete_actual_object = \
             DeleteActualObject(self, actual_obj, timestamp)
 
+        delete_object_called = []
+
+        def pop_queue(c, o):
+            self.assertEqual(container, c)
+            self.assertEqual(obj, o)
+            delete_object_called[:] = [True]
+
+        x.pop_queue = pop_queue
+
         x.delete_object(actual_obj, timestamp, container, obj)
-        self.assertTrue(x.swift.delete_object_called)
+        self.assertTrue(delete_object_called)
         self.assertTrue(x.delete_actual_object.called)
 
     def test_report(self):
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer({}, logger=self.logger)
 
         x.report()
-        self.assertEqual(x.logger.log_dict['info'], [])
+        self.assertEqual(x.logger.get_lines_for_level('info'), [])
 
         x.logger._clear()
         x.report(final=True)
-        self.assertTrue('completed' in x.logger.log_dict['info'][-1][0][0],
-                        x.logger.log_dict['info'])
-        self.assertTrue('so far' not in x.logger.log_dict['info'][-1][0][0],
-                        x.logger.log_dict['info'])
+        self.assertTrue(
+            'completed' in str(x.logger.get_lines_for_level('info')))
+        self.assertTrue(
+            'so far' not in str(x.logger.get_lines_for_level('info')))
 
         x.logger._clear()
         x.report_last_time = time() - x.report_interval
         x.report()
-        self.assertTrue('completed' not in x.logger.log_dict['info'][-1][0][0],
-                        x.logger.log_dict['info'])
-        self.assertTrue('so far' in x.logger.log_dict['info'][-1][0][0],
-                        x.logger.log_dict['info'])
+        self.assertTrue(
+            'completed' not in str(x.logger.get_lines_for_level('info')))
+        self.assertTrue(
+            'so far' in str(x.logger.get_lines_for_level('info')))
 
     def test_run_once_nothing_to_do(self):
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger)
         x.swift = 'throw error because a string does not have needed methods'
         x.run_once()
-        self.assertEqual(x.logger.log_dict['exception'],
-                         [(("Unhandled exception",), {},
-                           "'str' object has no attribute "
-                           "'get_account_info'")])
+        self.assertEqual(x.logger.get_lines_for_level('error'),
+                         ["Unhandled exception: "])
+        log_args, log_kwargs = x.logger.log_dict['error'][0]
+        self.assertEqual(str(log_kwargs['exc_info'][1]),
+                         "'str' object has no attribute 'get_account_info'")
 
     def test_run_once_calls_report(self):
         class InternalClient(object):
@@ -247,15 +269,47 @@ class TestObjectExpirer(TestCase):
             def iter_containers(*a, **kw):
                 return []
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger)
         x.swift = InternalClient()
         x.run_once()
         self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 0 objects expired',), {})])
+            x.logger.get_lines_for_level('info'), [
+                'Pass beginning; 1 possible containers; 2 possible objects',
+                'Pass completed in 0s; 0 objects expired',
+            ])
+
+    def test_run_once_unicode_problem(self):
+        class InternalClient(object):
+
+            container_ring = FakeRing()
+
+            def get_account_info(*a, **kw):
+                return 1, 2
+
+            def iter_containers(*a, **kw):
+                return [{'name': u'1234'}]
+
+            def iter_objects(*a, **kw):
+                return [{'name': u'1234-troms\xf8'}]
+
+            def make_request(*a, **kw):
+                pass
+
+            def delete_container(*a, **kw):
+                pass
+
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger)
+        x.swift = InternalClient()
+
+        requests = []
+
+        def capture_requests(ipaddr, port, method, path, *args, **kwargs):
+            requests.append((method, path))
+
+        with mocked_http_conn(
+                200, 200, 200, give_connect=capture_requests):
+            x.run_once()
+        self.assertEqual(len(requests), 3)
 
     def test_container_timestamp_break(self):
         class InternalClient(object):
@@ -271,28 +325,28 @@ class TestObjectExpirer(TestCase):
             def iter_objects(*a, **kw):
                 raise Exception('This should not have been called')
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer(self.conf,
+                                  logger=self.logger)
         x.swift = InternalClient([{'name': str(int(time() + 86400))}])
         x.run_once()
-        for exccall in x.logger.log_dict['exception']:
-            self.assertTrue(
-                'This should not have been called' not in exccall[0][0])
-        self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 0 objects expired',), {})])
+        logs = x.logger.all_log_lines()
+        self.assertEqual(logs['info'], [
+            'Pass beginning; 1 possible containers; 2 possible objects',
+            'Pass completed in 0s; 0 objects expired',
+        ])
+        self.assertTrue('error' not in logs)
 
         # Reverse test to be sure it still would blow up the way expected.
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
-        x.swift = InternalClient([{'name': str(int(time() - 86400))}])
+        fake_swift = InternalClient([{'name': str(int(time() - 86400))}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
         x.run_once()
         self.assertEqual(
-            x.logger.log_dict['exception'],
-            [(('Unhandled exception',), {},
-              str(Exception('This should not have been called')))])
+            x.logger.get_lines_for_level('error'), [
+                'Unhandled exception: '])
+        log_args, log_kwargs = x.logger.log_dict['error'][-1]
+        self.assertEqual(str(log_kwargs['exc_info'][1]),
+                         'This should not have been called')
 
     def test_object_timestamp_break(self):
         class InternalClient(object):
@@ -315,41 +369,36 @@ class TestObjectExpirer(TestCase):
         def should_not_be_called(*a, **kw):
             raise Exception('This should not have been called')
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
             [{'name': '%d-actual-obj' % int(time() + 86400)}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
         x.run_once()
-        for exccall in x.logger.log_dict['exception']:
-            self.assertTrue(
-                'This should not have been called' not in exccall[0][0])
-        self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 0 objects expired',), {})])
-
+        self.assertTrue('error' not in x.logger.all_log_lines())
+        self.assertEqual(x.logger.get_lines_for_level('info'), [
+            'Pass beginning; 1 possible containers; 2 possible objects',
+            'Pass completed in 0s; 0 objects expired',
+        ])
         # Reverse test to be sure it still would blow up the way expected.
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
         ts = int(time() - 86400)
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
             [{'name': '%d-actual-obj' % ts}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
         x.delete_actual_object = should_not_be_called
         x.run_once()
-        excswhiledeleting = []
-        for exccall in x.logger.log_dict['exception']:
-            if exccall[0][0].startswith('Exception while deleting '):
-                excswhiledeleting.append(exccall[0][0])
         self.assertEqual(
-            excswhiledeleting,
+            x.logger.get_lines_for_level('error'),
             ['Exception while deleting object %d %d-actual-obj '
-             'This should not have been called' % (ts, ts)])
+             'This should not have been called: ' % (ts, ts)])
 
     def test_failed_delete_keeps_entry(self):
         class InternalClient(object):
+
+            container_ring = None
+
             def __init__(self, containers, objects):
                 self.containers = containers
                 self.objects = objects
@@ -362,9 +411,6 @@ class TestObjectExpirer(TestCase):
 
             def delete_container(*a, **kw):
                 pass
-
-            def delete_object(*a, **kw):
-                raise Exception('This should not have been called')
 
             def iter_objects(self, *a, **kw):
                 return self.objects
@@ -375,49 +421,48 @@ class TestObjectExpirer(TestCase):
         def should_not_get_called(container, obj):
             raise Exception('This should not have been called')
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
-        x.iter_containers = lambda: [str(int(time() - 86400))]
         ts = int(time() - 86400)
-        x.delete_actual_object = deliberately_blow_up
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
             [{'name': '%d-actual-obj' % ts}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
+        x.iter_containers = lambda: [str(int(time() - 86400))]
+        x.delete_actual_object = deliberately_blow_up
+        x.pop_queue = should_not_get_called
         x.run_once()
-        excswhiledeleting = []
-        for exccall in x.logger.log_dict['exception']:
-            if exccall[0][0].startswith('Exception while deleting '):
-                excswhiledeleting.append(exccall[0][0])
+        error_lines = x.logger.get_lines_for_level('error')
         self.assertEqual(
-            excswhiledeleting,
+            error_lines,
             ['Exception while deleting object %d %d-actual-obj '
-             'failed to delete actual object' % (ts, ts)])
+             'failed to delete actual object: ' % (ts, ts)])
         self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 0 objects expired',), {})])
+            x.logger.get_lines_for_level('info'), [
+                'Pass beginning; 1 possible containers; 2 possible objects',
+                'Pass completed in 0s; 0 objects expired',
+            ])
 
         # Reverse test to be sure it still would blow up the way expected.
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
         ts = int(time() - 86400)
-        x.delete_actual_object = lambda o, t: None
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
             [{'name': '%d-actual-obj' % ts}])
+        self.logger._clear()
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
+        x.delete_actual_object = lambda o, t: None
+        x.pop_queue = should_not_get_called
         x.run_once()
-        excswhiledeleting = []
-        for exccall in x.logger.log_dict['exception']:
-            if exccall[0][0].startswith('Exception while deleting '):
-                excswhiledeleting.append(exccall[0][0])
         self.assertEqual(
-            excswhiledeleting,
+            self.logger.get_lines_for_level('error'),
             ['Exception while deleting object %d %d-actual-obj This should '
-             'not have been called' % (ts, ts)])
+             'not have been called: ' % (ts, ts)])
 
     def test_success_gets_counted(self):
         class InternalClient(object):
+
+            container_ring = None
+
             def __init__(self, containers, objects):
                 self.containers = containers
                 self.objects = objects
@@ -437,23 +482,27 @@ class TestObjectExpirer(TestCase):
             def iter_objects(self, *a, **kw):
                 return self.objects
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
-        x.delete_actual_object = lambda o, t: None
-        self.assertEqual(x.report_objects, 0)
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
-            [{'name': '%d-actual-obj' % int(time() - 86400)}])
-        x.run_once()
-        self.assertEqual(x.report_objects, 1)
-        self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 1 objects expired',), {})])
+            [{'name': '%d-acc/c/actual-obj' % int(time() - 86400)}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
+        x.delete_actual_object = lambda o, t: None
+        x.pop_queue = lambda c, o: None
+        self.assertEqual(x.report_objects, 0)
+        with mock.patch('swift.obj.expirer.MAX_OBJECTS_TO_CACHE', 0):
+            x.run_once()
+            self.assertEqual(x.report_objects, 1)
+            self.assertEqual(
+                x.logger.get_lines_for_level('info'),
+                ['Pass beginning; 1 possible containers; 2 possible objects',
+                 'Pass completed in 0s; 1 objects expired'])
 
     def test_delete_actual_object_does_not_get_unicode(self):
         class InternalClient(object):
+
+            container_ring = None
+
             def __init__(self, containers, objects):
                 self.containers = containers
                 self.objects = objects
@@ -479,24 +528,28 @@ class TestObjectExpirer(TestCase):
             if isinstance(actual_obj, unicode):
                 got_unicode[0] = True
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
-        x.delete_actual_object = delete_actual_object_test_for_unicode
-        self.assertEqual(x.report_objects, 0)
-        x.swift = InternalClient(
+        fake_swift = InternalClient(
             [{'name': str(int(time() - 86400))}],
             [{'name': u'%d-actual-obj' % int(time() - 86400)}])
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger,
+                                  swift=fake_swift)
+        x.delete_actual_object = delete_actual_object_test_for_unicode
+        x.pop_queue = lambda c, o: None
+        self.assertEqual(x.report_objects, 0)
         x.run_once()
         self.assertEqual(x.report_objects, 1)
         self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 1 objects expired',), {})])
+            x.logger.get_lines_for_level('info'), [
+                'Pass beginning; 1 possible containers; 2 possible objects',
+                'Pass completed in 0s; 1 objects expired',
+            ])
         self.assertFalse(got_unicode[0])
 
     def test_failed_delete_continues_on(self):
         class InternalClient(object):
+
+            container_ring = None
+
             def __init__(self, containers, objects):
                 self.containers = containers
                 self.objects = objects
@@ -519,8 +572,7 @@ class TestObjectExpirer(TestCase):
         def fail_delete_actual_object(actual_obj, timestamp):
             raise Exception('failed to delete actual object')
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer(self.conf, logger=self.logger)
 
         cts = int(time() - 86400)
         ots = int(time() - 86400)
@@ -538,28 +590,24 @@ class TestObjectExpirer(TestCase):
         x.swift = InternalClient(containers, objects)
         x.delete_actual_object = fail_delete_actual_object
         x.run_once()
-        excswhiledeleting = []
-        for exccall in x.logger.log_dict['exception']:
-            if exccall[0][0].startswith('Exception while deleting '):
-                excswhiledeleting.append(exccall[0][0])
-        self.assertEqual(sorted(excswhiledeleting), sorted([
+        error_lines = x.logger.get_lines_for_level('error')
+        self.assertEqual(sorted(error_lines), sorted([
             'Exception while deleting object %d %d-actual-obj failed to '
-            'delete actual object' % (cts, ots),
+            'delete actual object: ' % (cts, ots),
             'Exception while deleting object %d %d-next-obj failed to '
-            'delete actual object' % (cts, ots),
+            'delete actual object: ' % (cts, ots),
             'Exception while deleting object %d %d-actual-obj failed to '
-            'delete actual object' % (cts + 1, ots),
+            'delete actual object: ' % (cts + 1, ots),
             'Exception while deleting object %d %d-next-obj failed to '
-            'delete actual object' % (cts + 1, ots),
+            'delete actual object: ' % (cts + 1, ots),
             'Exception while deleting container %d failed to delete '
-            'container' % (cts,),
+            'container: ' % (cts,),
             'Exception while deleting container %d failed to delete '
-            'container' % (cts + 1,)]))
-        self.assertEqual(
-            x.logger.log_dict['info'],
-            [(('Pass beginning; 1 possible containers; '
-               '2 possible objects',), {}),
-             (('Pass completed in 0s; 0 objects expired',), {})])
+            'container: ' % (cts + 1,)]))
+        self.assertEqual(x.logger.get_lines_for_level('info'), [
+            'Pass beginning; 1 possible containers; 2 possible objects',
+            'Pass completed in 0s; 0 objects expired',
+        ])
 
     def test_run_forever_initial_sleep_random(self):
         global last_not_sleep
@@ -594,8 +642,7 @@ class TestObjectExpirer(TestCase):
                 raise Exception('exception %d' % raises[0])
             raise SystemExit('exiting exception %d' % raises[0])
 
-        x = expirer.ObjectExpirer({})
-        x.logger = FakeLogger()
+        x = expirer.ObjectExpirer({}, logger=self.logger)
         orig_sleep = expirer.sleep
         try:
             expirer.sleep = not_sleep
@@ -606,9 +653,11 @@ class TestObjectExpirer(TestCase):
         finally:
             expirer.sleep = orig_sleep
         self.assertEqual(str(err), 'exiting exception 2')
-        self.assertEqual(x.logger.log_dict['exception'],
-                         [(('Unhandled exception',), {},
-                           'exception 1')])
+        self.assertEqual(x.logger.get_lines_for_level('error'),
+                         ['Unhandled exception: '])
+        log_args, log_kwargs = x.logger.log_dict['error'][0]
+        self.assertEqual(str(log_kwargs['exc_info'][1]),
+                         'exception 1')
 
     def test_delete_actual_object(self):
         got_env = [None]
@@ -643,7 +692,7 @@ class TestObjectExpirer(TestCase):
         self.assertEqual(got_env[0]['HTTP_X_IF_DELETE_AT'], ts)
         self.assertEqual(got_env[0]['PATH_INFO'], '/v1/path/to/object name')
 
-    def test_delete_actual_object_handles_404(self):
+    def test_delete_actual_object_raises_404(self):
 
         def fake_app(env, start_response):
             start_response('404 Not Found', [('Content-Length', '0')])
@@ -652,7 +701,8 @@ class TestObjectExpirer(TestCase):
         internal_client.loadapp = lambda *a, **kw: fake_app
 
         x = expirer.ObjectExpirer({})
-        x.delete_actual_object('/path/to/object', '1234')
+        self.assertRaises(internal_client.UnexpectedResponse,
+                          x.delete_actual_object, '/path/to/object', '1234')
 
     def test_delete_actual_object_handles_412(self):
 
@@ -692,9 +742,30 @@ class TestObjectExpirer(TestCase):
         x = expirer.ObjectExpirer({})
         x.swift.make_request = mock.MagicMock()
         x.delete_actual_object(name, timestamp)
-        self.assertTrue(x.swift.make_request.called)
+        self.assertEqual(x.swift.make_request.call_count, 1)
         self.assertEqual(x.swift.make_request.call_args[0][1],
                          '/v1/' + urllib.quote(name))
+
+    def test_pop_queue(self):
+        class InternalClient(object):
+            container_ring = FakeRing()
+        x = expirer.ObjectExpirer({}, logger=self.logger,
+                                  swift=InternalClient())
+        requests = []
+
+        def capture_requests(ipaddr, port, method, path, *args, **kwargs):
+            requests.append((method, path))
+        with mocked_http_conn(
+                200, 200, 200, give_connect=capture_requests) as fake_conn:
+            x.pop_queue('c', 'o')
+            self.assertRaises(StopIteration, fake_conn.code_iter.next)
+        for method, path in requests:
+            self.assertEqual(method, 'DELETE')
+            device, part, account, container, obj = utils.split_path(
+                path, 5, 5, True)
+            self.assertEqual(account, '.expiring_objects')
+            self.assertEqual(container, 'c')
+            self.assertEqual(obj, 'o')
 
 
 if __name__ == '__main__':
