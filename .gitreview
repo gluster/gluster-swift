@@ -1,2 +1,6 @@
 [gerrit]
-defaultbranch=icehouse
+host=review.gluster.org
+port=29418
+project=gluster-swift.git
+defaultbranch=master
+defaultremote=gerrit
