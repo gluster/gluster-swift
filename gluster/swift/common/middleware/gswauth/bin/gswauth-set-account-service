@@ -75,7 +75,7 @@ Example: %prog -K gswauthkey test storage local http://127.0.0.1:8080/v1/AUTH_01
     except socket.gaierror, err:
         exit('Service set failed: %s. ' \
              'Check that the admin_url is valid' % err)
-    except socket.error, (errno, msg):
+    except socket.error, msg:
         exit('Service set failed: %s. ' \
              'Check that the admin_url is valid' % msg)
     if resp.status // 100 != 2:

@@ -65,7 +65,7 @@ if __name__ == '__main__':
     except socket.gaierror, err:
         exit('User deletion failed: %s. ' \
              'Check that the admin_url is valid' % err)
-    except socket.error, (errno, msg):
+    except socket.error, msg:
         exit('User deletion failed: %s. ' \
              'Check that the admin_url is valid' % msg)
 

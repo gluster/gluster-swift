@@ -64,7 +64,7 @@ if __name__ == '__main__':
     except socket.gaierror, err:
         exit('Account creation failed: %s. ' \
              'Check that the admin_url is valid' % err)
-    except socket.error, (errno, msg):
+    except socket.error, msg:
         exit('Account creation failed: %s. ' \
              'Check that the admin_url is valid' % msg)
 

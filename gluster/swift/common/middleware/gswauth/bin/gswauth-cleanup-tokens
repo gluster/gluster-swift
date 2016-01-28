@@ -94,7 +94,7 @@ if __name__ == '__main__':
                 else:
                     exit('Purging %s failed with status '
                         'code %d' % (options.purge_account, e.http_status))
-            except socket.error, (errno, msg):
+            except socket.error, msg:
                 exit('Token clean-up failed: %s. ' \
                      'Check that the admin_url is valid' % msg)
             if objs:
@@ -141,7 +141,7 @@ if __name__ == '__main__':
                 else:
                     exit('Object listing on container %s failed with status '
                         'code %d' % (container, e.http_status))
-            except socket.error, (errno, msg):
+            except socket.error, msg:
                 exit('Token clean-up failed: %s. ' \
                      'Check that the admin_url is valid' % msg)
 

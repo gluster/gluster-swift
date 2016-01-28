@@ -88,7 +88,7 @@ If the [user] is '.groups', the active groups for the account will be listed.
     except socket.gaierror, err:
         exit('List failed: %s. ' \
              'Check that the admin_url is valid' % err)
-    except socket.error, (errno, msg):
+    except socket.error, msg:
         exit('List failed: %s. ' \
              'Check that the admin_url is valid' % msg)
 
