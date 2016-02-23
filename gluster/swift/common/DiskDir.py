@@ -696,7 +696,7 @@ class DiskAccount(DiskCommon):
         return containers
 
     def list_containers_iter(self, limit, marker, end_marker,
-                             prefix, delimiter):
+                             prefix, delimiter, response_content_type=None):
         """
         Return tuple of name, object_count, bytes_used, 0(is_subdir).
         Used by account server.
@@ -709,6 +709,7 @@ class DiskAccount(DiskCommon):
         if containers:
             containers.sort()
         else:
+            # No containers in account, return empty list
             return account_list
 
         if containers and end_marker:
@@ -736,6 +737,19 @@ class DiskAccount(DiskCommon):
             else:
                 containers = filter_delimiter(containers, delimiter, prefix,
                                               marker)
+
+        if response_content_type == 'text/plain':
+            # The client is only asking for a plain list of containers and NOT
+            # asking for any extended information about container such as
+            # bytes used or object count.
+            for container in containers:
+                # When response_content_type == 'text/plain', Swift will only
+                # consume the name of the container (first element of tuple).
+                # Refer: swift.account.utils.account_listing_response()
+                account_list.append((container, 0, 0, 0))
+                if len(account_list) >= limit:
+                    break
+            return account_list
 
         count = 0
         for cont in containers:

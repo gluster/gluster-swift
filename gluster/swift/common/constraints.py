@@ -97,3 +97,8 @@ __Ring = _ring.Ring
 
 # Replace the original Ring class
 _ring.Ring = ring.Ring
+
+# Monkey patch account_listing_response
+import swift.account.utils
+from gluster.swift.account.utils import account_listing_response as gf_als
+swift.account.utils.account_listing_response = gf_als

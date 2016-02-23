@@ -375,7 +375,6 @@ def get_account_details(acc_path):
     Return container_list and container_count.
     """
     container_list = []
-    container_count = 0
 
     if do_isdir(acc_path):
         for name in do_listdir(acc_path):
@@ -383,11 +382,12 @@ def get_account_details(acc_path):
                     or name.lower() == ASYNCDIR \
                     or name.lower() == TRASHCAN \
                     or not do_isdir(os.path.join(acc_path, name)):
+                # Do not include .async_pending, .trashcan and all
+                # non-directories in containers list
                 continue
-            container_count += 1
             container_list.append(name)
 
-    return container_list, container_count
+    return container_list, len(container_list)
 
 
 def _read_for_etag(fp):

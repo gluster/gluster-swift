@@ -22,6 +22,7 @@ import unittest
 import shutil
 import tarfile
 import hashlib
+from mock import Mock, patch
 from time import time
 from swift.common.utils import normalize_timestamp
 from gluster.swift.common import utils
@@ -1178,6 +1179,48 @@ class TestAccountBroker(unittest.TestCase):
         self.assertEquals(len(listing), 2)
         self.assertEquals([row[0] for row in listing],
                           ['3-0049-', '3-0049-0049'])
+
+    def test_list_containers_iter_plain_listing(self):
+        broker = self._get_broker(account='a')
+        broker.initialize(self.initial_ts)
+        for cont in xrange(10):
+            # Create 10 containers - lci0 to lci9
+            self._create_container('lci%d' % cont)
+
+        # Check and assert that only name is fetched.
+        listing = broker.list_containers_iter(100, '', None, None,
+                                              '', 'text/plain')
+        self.assertEquals(len(listing), 10)
+        for i, (name, o_count, bytes_used, j) in enumerate(listing):
+            self.assertEqual(name, 'lci%d' % i)
+            self.assertEqual(o_count, 0)
+            self.assertEqual(bytes_used, 0)
+            self.assertEqual(j, 0)
+
+        # Check that limit is still honored.
+        listing = broker.list_containers_iter(5, '', None, None,
+                                              '', 'text/plain')
+        self.assertEquals(len(listing), 5)
+
+        # Confirm that metadata of containers (xattrs) are not fetched when
+        # response_content_type is text/plain
+        _m_r_md = Mock(return_value={})
+        with patch('gluster.swift.common.DiskDir._read_metadata', _m_r_md):
+            listing = broker.list_containers_iter(100, '', None, None,
+                                                  '', 'text/plain')
+            self.assertEquals(len(listing), 10)
+        self.assertFalse(_m_r_md.called)
+
+        # Confirm that metadata of containers (xattrs) are still fetched when
+        # response_content_type is NOT text/plain
+        _m_r_md.reset_mock()
+        with patch('gluster.swift.common.DiskDir._read_metadata', _m_r_md):
+            listing = broker.list_containers_iter(100, '', None, None,
+                                                  '', 'application/json')
+            self.assertEquals(len(listing), 10)
+        self.assertTrue(_m_r_md.called)
+        self.assertEqual(_m_r_md.call_count, 10)
+
 
     def test_double_check_trailing_delimiter(self):
         # Test swift.common.db.AccountBroker.list_containers_iter for an
