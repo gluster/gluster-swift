@@ -1257,6 +1257,11 @@ class Swauth(object):
                 if delete_token:
                     self.make_pre_authed_request(
                         req.environ, 'DELETE', path).get_response(self.app)
+                    memcache_client = cache_from_env(req.environ)
+                    if memcache_client:
+                        memcache_key = '%s/auth/%s' % (self.reseller_prefix,
+                                                       candidate_token)
+                        memcache_client.delete(memcache_key)
         # Create a new token if one didn't exist
         if not token:
             # Retrieve account id, we'll save this in the token
