@@ -1409,7 +1409,7 @@ class Swauth(object):
                 TRUE_VALUES:
             self.itoken = '%sitk%s' % (self.reseller_prefix, uuid4().hex)
             memcache_key = '%s/auth/%s' % (self.reseller_prefix, self.itoken)
-            self.itoken_expires = time() + self.token_life - 60
+            self.itoken_expires = time() + self.token_life
             memcache_client = cache_from_env(env)
             if not memcache_client:
                 raise Exception(
