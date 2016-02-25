@@ -26,6 +26,7 @@ from swift.common.swob import Request, Response
 
 from gluster.swift.common.middleware.gswauth.swauth import middleware as auth
 from gluster.swift.common.middleware.gswauth.swauth.authtypes import MAX_TOKEN_LENGTH
+from gluster.swift.common.middleware.gswauth.swauth.middleware import CONTENT_TYPE_JSON
 
 
 DEFAULT_TOKEN_LIFE = 86400
@@ -864,6 +865,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assert_(resp.headers.get(
             'x-auth-token',
             '').startswith('AUTH_tk'), resp.headers.get('x-auth-token'))
@@ -901,6 +903,7 @@ class TestAuth(unittest.TestCase):
                      'X-Auth-Key': 'key',
                      'X-Auth-Token-Lifetime': 10}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         left = int(resp.headers['x-auth-token-expires'])
         self.assertTrue(left > 0, '%d > 0' % left)
         self.assertTrue(left <= 10, '%d <= 10' % left)
@@ -942,6 +945,7 @@ class TestAuth(unittest.TestCase):
                      'X-Auth-Token-Lifetime': MAX_TOKEN_LIFE * 10})
         resp = req.get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         left = int(resp.headers['x-auth-token-expires'])
         self.assertTrue(left > DEFAULT_TOKEN_LIFE,
                         '%d > %d' % (left, DEFAULT_TOKEN_LIFE))
@@ -982,6 +986,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Storage-User': 'usr',
                      'X-Storage-Pass': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assert_(resp.headers.get(
             'x-auth-token',
             '').startswith('AUTH_tk'), resp.headers.get('x-auth-token'))
@@ -1018,6 +1023,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Storage-User': 'act:usr',
                      'X-Storage-Pass': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assert_(
             resp.headers.get(
                 'x-auth-token',
@@ -1055,6 +1061,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assert_(resp.headers.get(
             'x-auth-token',
             '').startswith('AUTH_tk'), resp.headers.get('x-auth-token'))
@@ -1090,6 +1097,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(
             resp.headers.get('x-auth-token'),
             'AUTH_tktest')
@@ -1130,6 +1138,7 @@ class TestAuth(unittest.TestCase):
                      'X-Auth-New-Token': 'true'}).get_response(
             self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertNotEquals(
             resp.headers.get('x-auth-token'), 'AUTH_tktest')
         self.assertEquals(resp.headers.get('x-auth-token'),
@@ -1173,6 +1182,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertNotEquals(
             resp.headers.get('x-auth-token'),
             'AUTH_tktest')
@@ -1217,6 +1227,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': 'act:usr',
                      'X-Auth-Key': 'key'}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertNotEquals(
             resp.headers.get('x-auth-token'),
             'AUTH_tktest')
@@ -1385,6 +1396,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'supertest'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(json.loads(resp.body),
                           {"accounts": [{"name": "act"}]})
         self.assertEquals(self.test_auth.app.calls, 2)
@@ -1410,6 +1422,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'key'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(json.loads(resp.body),
                           {"accounts": [{"name": "act"}]})
         self.assertEquals(self.test_auth.app.calls, 3)
@@ -1519,6 +1532,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'supertest'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(
             json.loads(resp.body),
             {'account_id': 'AUTH_cfa',
@@ -1563,6 +1577,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'key'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(
             json.loads(resp.body),
             {'account_id': 'AUTH_cfa',
@@ -1740,6 +1755,7 @@ class TestAuth(unittest.TestCase):
                                   {'new_endpoint': 'new_value'}})
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(
             json.loads(resp.body),
             {'storage': {'default': 'local',
@@ -1767,6 +1783,7 @@ class TestAuth(unittest.TestCase):
                                  {'storage': {'new_endpoint': 'new_value'}})
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(
             json.loads(resp.body),
             {'storage': {'default': 'local',
@@ -1794,6 +1811,7 @@ class TestAuth(unittest.TestCase):
                                  {'storage': {'local': 'new_value'}})
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(json.loads(resp.body),
                           {'storage': {'default': 'local',
                                        'local': 'new_value'}})
@@ -2853,6 +2871,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'supertest'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(resp.body, json.dumps(
             {"groups": [{"name": "act:usr"}, {"name": "act"},
                         {"name": ".admin"}],
@@ -2912,6 +2931,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'supertest'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(resp.body, json.dumps(
             {"groups": [{"name": ".admin"}, {"name": "act"},
                         {"name": "act:tester"}, {"name": "act:tester3"}]}))
@@ -3024,6 +3044,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'key'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(resp.body, json.dumps(
             {"groups": [{"name": "act:usr"}, {"name": "act"}],
              "auth": "plaintext:key"}))
@@ -3115,6 +3136,7 @@ class TestAuth(unittest.TestCase):
                                  'X-Auth-Admin-Key': 'supertest'}
                              ).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assertEquals(resp.body, json.dumps(
             {"groups": [{"name": "act:usr"}, {"name": "act"},
                         {"name": ".reseller_admin"}],
@@ -4467,6 +4489,7 @@ class TestAuth(unittest.TestCase):
             headers={'X-Auth-User': sent_user,
                      'X-Auth-Key': sent_key}).get_response(self.test_auth)
         self.assertEquals(resp.status_int, 200)
+        self.assertEqual(resp.content_type, CONTENT_TYPE_JSON)
         self.assert_(
             resp.headers.get('x-auth-token',
                              '').startswith('AUTH_tk'),

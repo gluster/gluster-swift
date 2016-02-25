@@ -43,6 +43,8 @@ import swift.common.wsgi
 
 from gluster.swift.common.middleware.gswauth.swauth import authtypes
 
+CONTENT_TYPE_JSON = 'application/json'
+
 
 class Swauth(object):
     """
@@ -589,7 +591,8 @@ class Swauth(object):
                 if container['name'][0] != '.':
                     listing.append({'name': container['name']})
             marker = sublisting[-1]['name'].encode('utf-8')
-        return Response(body=json.dumps({'accounts': listing}))
+        return Response(body=json.dumps({'accounts': listing}),
+                        content_type=CONTENT_TYPE_JSON)
 
     def handle_get_account(self, req):
         """
@@ -646,9 +649,10 @@ class Swauth(object):
                 if obj['name'][0] != '.':
                     listing.append({'name': obj['name']})
             marker = sublisting[-1]['name'].encode('utf-8')
-        return Response(body=json.dumps(
-            {'account_id': account_id,
-             'services': services, 'users': listing}))
+        return Response(content_type=CONTENT_TYPE_JSON,
+                        body=json.dumps({'account_id': account_id,
+                                         'services': services,
+                                         'users': listing}))
 
     def handle_set_services(self, req):
         """
@@ -718,7 +722,8 @@ class Swauth(object):
         if resp.status_int // 100 != 2:
             raise Exception('Could not save .services object: %s %s' %
                             (path, resp.status))
-        return Response(request=req, body=services)
+        return Response(request=req, body=services,
+                        content_type=CONTENT_TYPE_JSON)
 
     def handle_put_account(self, req):
         """
@@ -962,7 +967,7 @@ class Swauth(object):
                ('.reseller_admin' in display_groups and
                     not self.is_super_admin(req)):
                     return HTTPForbidden(request=req)
-        return Response(body=body)
+        return Response(body=body, content_type=CONTENT_TYPE_JSON)
 
     def handle_put_user(self, req):
         """
@@ -1208,6 +1213,7 @@ class Swauth(object):
             token = self.get_itoken(req.environ)
             url = '%s/%s' % (self.dsc_url, self.auth_account)
             return Response(
+                content_type=CONTENT_TYPE_JSON,
                 request=req,
                 body=json.dumps(
                     {'storage': {'default': 'local',
@@ -1315,6 +1321,7 @@ class Swauth(object):
         detail = json.loads(resp.body)
         url = detail['storage'][detail['storage']['default']]
         return Response(
+            content_type=CONTENT_TYPE_JSON,
             request=req, body=resp.body,
             headers={'x-auth-token': token, 'x-storage-token': token,
                      'x-auth-token-expires': str(int(expires - time())),
