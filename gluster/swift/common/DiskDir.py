@@ -368,7 +368,8 @@ class DiskDir(DiskCommon):
 
     def list_objects_iter(self, limit, marker, end_marker,
                           prefix, delimiter, path=None,
-                          storage_policy_index=0):
+                          storage_policy_index=0,
+                          out_content_type=None):
         """
         Returns tuple of name, created_at, size, content_type, etag.
         """
@@ -390,6 +391,7 @@ class DiskDir(DiskCommon):
         if objects:
             objects.sort()
         else:
+            # No objects in container , return empty list
             return container_list
 
         if end_marker:
@@ -416,6 +418,16 @@ class DiskDir(DiskCommon):
             else:
                 objects = filter_delimiter(objects, delimiter, prefix, marker,
                                            path)
+
+        if out_content_type == 'text/plain':
+            # The client is only asking for a plain list of objects and NOT
+            # asking for any extended information about objects such as
+            # bytes used or etag.
+            for obj in objects:
+                container_list.append((obj, 0, 0, 0, 0))
+                if len(container_list) >= limit:
+                        break
+            return container_list
 
         count = 0
         for obj in objects:

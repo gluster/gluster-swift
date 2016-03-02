@@ -801,6 +801,48 @@ class TestContainerBroker(unittest.TestCase):
         self.assertEquals([row[0] for row in listing],
                           ['pets/fish/a', 'pets/fish/b'])
 
+    def test_list_objects_iter_plain_listing(self):
+        broker = self._get_broker(account='a', container='c')
+        broker.initialize(self.initial_ts)
+        for obj1 in xrange(10):
+            for obj2 in xrange(10):
+                # Create 100 objects
+                self._create_file('dir%d/obj%d' % (obj1, obj2))
+
+        # Check and assert that only name is fetched.
+        listing = broker.list_objects_iter(500, '', None, None, '',
+                                           out_content_type="text/plain")
+        self.assertEquals(len(listing), 100)
+        for (name, ts, clen, ctype, etag) in listing:
+            self.assertEqual(ts, 0)
+            self.assertEqual(clen, 0)
+            self.assertEqual(ctype, 0)
+            self.assertEqual(etag, 0)
+
+        # Check that limit is still honored.
+        listing = broker.list_objects_iter(25, '', None, None, '',
+                                           out_content_type="text/plain")
+        self.assertEquals(len(listing), 25)
+
+        # Confirm that metadata of objects (xattrs) are not fetched when
+        # out_content_type is text/plain
+        _m_r_md = Mock(return_value={})
+        with patch('gluster.swift.common.utils.read_metadata', _m_r_md):
+            listing = broker.list_objects_iter(500, '', None, None, '',
+                                               out_content_type="text/plain")
+            self.assertEquals(len(listing), 100)
+        # 10 getxattr() calls for 10 directories, no getxattr() on objects
+        self.assertEqual(_m_r_md.call_count, 10)
+
+        # Confirm that metadata of objects (xattrs) are still fetched when
+        # out_content_type is NOT text/plain
+        _m_r_md.reset_mock()
+        with patch('gluster.swift.common.utils.read_metadata', _m_r_md):
+            listing = broker.list_objects_iter(500, '', None, None, '')
+            self.assertEquals(len(listing), 100)
+        # 10 getxattr() calls for 10 directories and 100 more for 100 objects
+        self.assertEqual(_m_r_md.call_count, 110)
+
     def test_double_check_trailing_delimiter(self):
         # Test swift.common.db.ContainerBroker.list_objects_iter for a
         # container that has an odd file with a trailing delimiter

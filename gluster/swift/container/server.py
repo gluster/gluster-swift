@@ -23,7 +23,13 @@ from swift.container import server
 from gluster.swift.common.DiskDir import DiskDir
 from swift.common.utils import public, timing_stats
 from swift.common.exceptions import DiskFileNoSpace
-from swift.common.swob import HTTPInsufficientStorage
+from swift.common.swob import HTTPInsufficientStorage, HTTPNotFound, \
+    HTTPPreconditionFailed
+from swift.common.request_helpers import get_param, get_listing_content_type, \
+    split_and_validate_path
+from swift.common.constraints import check_mount
+from swift.container.server import gen_resp_headers
+from swift.common import constraints
 
 
 class ContainerController(server.ContainerController):
@@ -76,6 +82,52 @@ class ContainerController(server.ContainerController):
             # space or exceed quota when creating containers.
             drive = req.split_path(1, 1, True)
             return HTTPInsufficientStorage(drive=drive, request=req)
+
+    @public
+    @timing_stats()
+    def GET(self, req):
+        """
+        Handle HTTP GET request.
+
+        This method is exact copy of swift.container.server.GET() except
+        that this version of it passes 'out_content_type' information to
+        broker.list_objects_iter()
+        """
+        drive, part, account, container, obj = split_and_validate_path(
+            req, 4, 5, True)
+        path = get_param(req, 'path')
+        prefix = get_param(req, 'prefix')
+        delimiter = get_param(req, 'delimiter')
+        if delimiter and (len(delimiter) > 1 or ord(delimiter) > 254):
+            # delimiters can be made more flexible later
+            return HTTPPreconditionFailed(body='Bad delimiter')
+        marker = get_param(req, 'marker', '')
+        end_marker = get_param(req, 'end_marker')
+        limit = constraints.CONTAINER_LISTING_LIMIT
+        given_limit = get_param(req, 'limit')
+        if given_limit and given_limit.isdigit():
+            limit = int(given_limit)
+            if limit > constraints.CONTAINER_LISTING_LIMIT:
+                return HTTPPreconditionFailed(
+                    request=req,
+                    body='Maximum limit is %d'
+                    % constraints.CONTAINER_LISTING_LIMIT)
+        out_content_type = get_listing_content_type(req)
+        if self.mount_check and not check_mount(self.root, drive):
+            return HTTPInsufficientStorage(drive=drive, request=req)
+        broker = self._get_container_broker(drive, part, account, container,
+                                            pending_timeout=0.1,
+                                            stale_reads_ok=True)
+        info, is_deleted = broker.get_info_is_deleted()
+        resp_headers = gen_resp_headers(info, is_deleted=is_deleted)
+        if is_deleted:
+            return HTTPNotFound(request=req, headers=resp_headers)
+        container_list = broker.list_objects_iter(
+            limit, marker, end_marker, prefix, delimiter, path,
+            storage_policy_index=info['storage_policy_index'],
+            out_content_type=out_content_type)
+        return self.create_listing(req, out_content_type, info, resp_headers,
+                                   broker.metadata, container_list, container)
 
 
 def app_factory(global_conf, **local_conf):
