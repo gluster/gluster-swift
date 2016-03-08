@@ -4791,6 +4791,20 @@ class TestAuth(unittest.TestCase):
         self.assertEquals(resp.environ['swift.authorize'],
                           self.test_auth.denied_response)
 
+    def test_s3_creds_unicode(self):
+        self.test_auth.app = FakeApp(iter([
+            ('200 Ok', {},
+             json.dumps({"auth": unicode("plaintext:key)"),
+                         "groups": [{'name': "act:usr"}, {'name': "act"},
+                                    {'name': ".admin"}]})),
+            ('204 Ok', {'X-Container-Meta-Account-Id': 'AUTH_act'}, '')]))
+        env = \
+            {'HTTP_AUTHORIZATION': 'AWS act:user:3yW7oFFWOn+fhHMu7E47RKotL1Q=',
+             'PATH_INFO': '/v1/AUTH_act/c1'}
+        token = 'UFVUCgoKRnJpLCAyNiBGZWIgMjAxNiAwNjo0NT'\
+                'ozNCArMDAwMAovY29udGFpbmVyMw=='
+        self.assertEqual(self.test_auth.get_groups(env, token), None)
+
 
 if __name__ == '__main__':
     unittest.main()
