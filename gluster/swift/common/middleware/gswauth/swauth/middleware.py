@@ -1475,14 +1475,21 @@ class Swauth(object):
     def credentials_match(self, user_detail, key):
         """
         Returns True if the key is valid for the user_detail.
-        It will use self.auth_encoder to check for a key match.
+        It will use auth_encoder type the password was encoded with,
+        to check for a key match.
 
         :param user_detail: The dict for the user.
         :param key: The key to validate for the user.
         :returns: True if the key is valid for the user, False if not.
         """
-        return user_detail and self.auth_encoder().match(
-            key, user_detail.get('auth'))
+        if user_detail:
+            creds = user_detail.get('auth')
+            auth_type = creds.split(':')[0]
+            auth_encoder = getattr(authtypes, auth_type.title(), None)
+            if auth_encoder is None:
+                self.logger.error('Invalid auth_type %s' % auth_type)
+                return False
+        return user_detail and auth_encoder().match(key, creds)
 
     def is_user_changing_own_key(self, req, user):
         """

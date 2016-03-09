@@ -18,8 +18,8 @@ try:
 except ImportError:
     import json
 import unittest
-from nose import SkipTest
 from contextlib import contextmanager
+import mock
 from time import time
 
 from swift.common.swob import Request, Response
@@ -125,6 +125,33 @@ class TestAuth(unittest.TestCase):
                 'super_admin_key': 'supertest',
                 'token_life': str(DEFAULT_TOKEN_LIFE),
                 'max_token_life': str(MAX_TOKEN_LIFE)})(FakeApp())
+
+    def test_salt(self):
+        for auth_type in ('sha1', 'sha512'):
+            # Salt not manually set (gswauthsalt should be default)
+            test_auth = \
+                auth.filter_factory({
+                    'super_admin_key': 'supertest',
+                    'token_life': str(DEFAULT_TOKEN_LIFE),
+                    'max_token_life': str(MAX_TOKEN_LIFE),
+                    'auth_type': auth_type})(FakeApp())
+            self.assertEqual(test_auth.auth_encoder.salt, "gswauthsalt")
+            h_key = test_auth.auth_encoder().encode("key")
+            prefix = auth_type + ":" + "gswauthsalt" + '$'
+            self.assertTrue(h_key.startswith(prefix))
+
+            # Salt manually set
+            test_auth = \
+                auth.filter_factory({
+                    'super_admin_key': 'supertest',
+                    'token_life': str(DEFAULT_TOKEN_LIFE),
+                    'max_token_life': str(MAX_TOKEN_LIFE),
+                    'auth_type': auth_type,
+                    'auth_type_salt': "mysalt"})(FakeApp())
+            self.assertEqual(test_auth.auth_encoder.salt, "mysalt")
+            h_key = test_auth.auth_encoder().encode("key")
+            prefix = auth_type + ":" + "mysalt" + '$'
+            self.assertTrue(h_key.startswith(prefix))
 
     def test_super_admin_key_not_required(self):
         auth.filter_factory({})(FakeApp())
@@ -236,6 +263,31 @@ class TestAuth(unittest.TestCase):
         self.assertEquals(
             ath.dsc_url2,
             'http://host2/path2')
+
+    def test_credentials_match_auth_encoder_type(self):
+        plaintext_auth = {'auth': 'plaintext:key'}
+        sha1_key = ("sha1:T0YFdhqN4uDRWiYLxWa7H2T8AewG4fEYQyJFRLsgcfk=$46c58"
+                    "07eb8a32e8f404fea9eaaeb60b7e1207ff1")
+        sha1_auth = {'auth': sha1_key}
+        sha512_key = ("sha512:aSm0jEeqIp46T5YLZy1r8+cXs/Xzs1S4VUwVauhBs44=$ef"
+                      "7332ec1288bf69c75682eb8d459d5a84baa7e43f45949c242a9af9"
+                      "7130ef16ac361fe1aa33a789e218122b83c54ef1923fc015080741"
+                      "ca21f6187329f6cb7a")
+        sha512_auth = {'auth': sha512_key}
+
+        # test all possible config settings work with all possible auth types
+        for auth_type in ('plaintext', 'sha1', 'sha512'):
+            test_auth = auth.filter_factory({'super_admin_key': 'superkey',
+                                            'auth_type': auth_type})(FakeApp())
+            for detail in (plaintext_auth, sha1_auth, sha512_auth):
+                self.assertTrue(test_auth.credentials_match(detail, 'key'))
+            # test invalid auth type stored
+            invalid_detail = {'auth': 'Junk:key'}
+            test_auth.logger = mock.Mock()
+            self.assertFalse(test_auth.credentials_match(invalid_detail,
+                                                         'key'))
+            # make sure error is logged
+            test_auth.logger.called_once_with('Invalid auth_type Junk')
 
     def test_top_level_denied(self):
         resp = Request.blank(

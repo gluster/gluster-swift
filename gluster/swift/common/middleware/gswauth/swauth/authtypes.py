@@ -35,6 +35,7 @@ value or to a default value.
 """
 
 import hashlib
+import os
 
 
 #: Maximum length any valid token should ever be.
@@ -80,6 +81,20 @@ class Sha1(object):
     must be capitalized. encode and match methods must be provided and are
     the only ones that will be used by swauth.
     """
+
+    def encode_w_salt(self, salt, key):
+        """
+        Encodes a user key with salt into a particular format. The result of
+        this method will be used internally.
+
+        :param salt: Salt for hashing
+        :param key: User's secret key
+        :returns: A string representing user credentials
+        """
+        enc_key = '%s%s' % (salt, key)
+        enc_val = hashlib.sha1(enc_key).hexdigest()
+        return "sha1:%s$%s" % (salt, enc_val)
+
     def encode(self, key):
         """
         Encodes a user key into a particular format. The result of this method
@@ -88,9 +103,8 @@ class Sha1(object):
         :param key: User's secret key
         :returns: A string representing user credentials
         """
-        enc_key = '%s%s' % (self.salt, key)
-        enc_val = hashlib.sha1(enc_key).hexdigest()
-        return "sha1:%s$%s" % (self.salt, enc_val)
+        salt = self.salt or os.urandom(32).encode('base64').rstrip()
+        return self.encode_w_salt(salt, key)
 
     def match(self, key, creds):
         """
@@ -100,4 +114,59 @@ class Sha1(object):
         :param creds: User's stored credentials
         :returns: True if the supplied key is valid, False otherwise
         """
-        return self.encode(key) == creds
+
+        type, rest = creds.split(':')
+        salt, enc = rest.split('$')
+
+        return self.encode_w_salt(salt, key) == creds
+
+
+class Sha512(object):
+    """
+    Provides a particular auth type for encoding format for encoding and
+    matching user keys.
+
+    This class must be all lowercase except for the first character, which
+    must be capitalized. encode and match methods must be provided and are
+    the only ones that will be used by swauth.
+    """
+
+    def encode_w_salt(self, salt, key):
+        """
+        Encodes a user key with salt into a particular format. The result of
+        this method will be used internal.
+
+        :param salt: Salt for hashing
+        :param key: User's secret key
+        :returns: A string representing user credentials
+        """
+        enc_key = '%s%s' % (salt, key)
+        enc_val = hashlib.sha512(enc_key).hexdigest()
+        return "sha512:%s$%s" % (salt, enc_val)
+
+    def encode(self, key):
+        """
+        Encodes a user key into a particular format. The result of this method
+        will be used by swauth for storing user credentials.
+
+        If salt is not manually set in conf file, a random salt will be
+        generated and used.
+
+        :param key: User's secret key
+        :returns: A string representing user credentials
+        """
+        salt = self.salt or os.urandom(32).encode('base64').rstrip()
+        return self.encode_w_salt(salt, key)
+
+    def match(self, key, creds):
+        """Checks whether the user-provided key matches the user's credentials
+
+        :param key: User-supplied key
+        :param creds: User's stored credentials
+        :returns: True if the supplied key is valid, False otherwise
+        """
+
+        type, rest = creds.split(':')
+        salt, enc = rest.split('$')
+
+        return self.encode_w_salt(salt, key) == creds
