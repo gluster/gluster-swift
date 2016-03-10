@@ -576,6 +576,7 @@ class DiskFile(object):
             self._put_datadir = self._container_path
 
         self._data_file = os.path.join(self._put_datadir, self._obj)
+        self._disk_file_open = False
 
     def open(self):
         """
@@ -641,6 +642,7 @@ class DiskFile(object):
                 # Re-raise the original exception after fd has been closed
                 raise
 
+        self._disk_file_open = True
         return self
 
     def _is_object_expired(self, metadata):
@@ -674,7 +676,7 @@ class DiskFile(object):
             previously invoked the :func:`swift.obj.diskfile.DiskFile.open`
             method.
         """
-        if self._metadata is None:
+        if not self._disk_file_open:
             raise DiskFileNotOpen()
         return self
 
@@ -694,19 +696,23 @@ class DiskFile(object):
             the REST API *before* the object has actually been read. It is the
             responsibility of the implementation to properly handle that.
         """
-        self._metadata = None
+        self._disk_file_open = False
         self._close_fd()
 
     def get_metadata(self):
         """
         Provide the metadata for a previously opened object as a dictionary.
 
+        This is invoked by Swift code in the GET path as follows:
+        with disk_file.open():
+            metadata = disk_file.get_metadata()
+
         :returns: object's metadata dictionary
         :raises DiskFileNotOpen: if the
             :func:`swift.obj.diskfile.DiskFile.open` method was not previously
             invoked
         """
-        if self._metadata is None:
+        if not self._disk_file_open:
             raise DiskFileNotOpen()
         return self._metadata
 
@@ -714,6 +720,9 @@ class DiskFile(object):
         """
         Return the metadata for an object without requiring the caller to open
         the object first.
+
+        This method is invoked by Swift code in POST, PUT, HEAD and DELETE path
+        metadata = disk_file.read_metadata()
 
         :returns: metadata dictionary for an object
         :raises DiskFileError: this implementation will raise the same
@@ -736,7 +745,7 @@ class DiskFile(object):
                            OS buffer cache
         :returns: a :class:`swift.obj.diskfile.DiskFileReader` object
         """
-        if self._metadata is None:
+        if not self._disk_file_open:
             raise DiskFileNotOpen()
         dr = DiskFileReader(
             self._fd, self._threadpool, self._mgr.disk_chunk_size,
@@ -915,6 +924,8 @@ class DiskFile(object):
         Write a block of metadata to an object without requiring the caller to
         open the object first.
 
+        This method is only called in the POST path.
+
         :param metadata: dictionary of metadata to be associated with the
                          object
         :raises DiskFileError: this implementation will raise the same
@@ -933,7 +944,10 @@ class DiskFile(object):
         metadata. If there are any, it should be appended to the metadata obj
         the user is trying to write.
         """
-        orig_metadata = self.read_metadata()
+        # If metadata has been previously fetched, use that.
+        # Stale metadata (outdated size/etag) would've been updated when
+        # metadata is fetched for the first time.
+        orig_metadata = self._metadata or read_metadata(self._data_file)
 
         sys_keys = [X_CONTENT_TYPE, X_ETAG, 'name', X_CONTENT_LENGTH,
                     X_OBJECT_TYPE, X_TYPE]
