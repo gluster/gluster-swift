@@ -5,6 +5,7 @@
 * [System Setup](#system_setup)
 * [Gluster For Swift Setup](#swift_setup)
 * [Using Gluster for Swift](#using_swift)
+* [Accessing over Amazon S3 API](s3.md)
 * [What now?](#what_now)
 
 <a name="overview" />
