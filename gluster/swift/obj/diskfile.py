@@ -164,7 +164,12 @@ def make_directory(full_path, uid, gid, metadata=None):
 
         # We created it, so we are reponsible for always setting the proper
         # ownership.
-        do_chown(full_path, uid, gid)
+        if not ((uid == DEFAULT_UID) and (gid == DEFAULT_GID)):
+            # If both UID and GID is -1 (default values), it has no effect.
+            # So don't do a chown.
+            # Further, at the time of this writing, UID and GID information
+            # is not passed to DiskFile.
+            do_chown(full_path, uid, gid)
         return True, metadata
 
 
@@ -965,7 +970,12 @@ class DiskFile(object):
         dw = None
         try:
             # Ensure it is properly owned before we make it available.
-            do_fchown(fd, self._uid, self._gid)
+            if not ((self._uid == DEFAULT_UID) and (self._gid == DEFAULT_GID)):
+                # If both UID and GID is -1 (default values), it has no effect.
+                # So don't do a fchown.
+                # Further, at the time of this writing, UID and GID information
+                # is not passed to DiskFile.
+                do_fchown(fd, self._uid, self._gid)
             # NOTE: we do not perform the fallocate() call at all. We ignore
             # it completely since at the time of this writing FUSE does not
             # support it.
