@@ -30,7 +30,7 @@ cleanup()
         sudo rm -rf /etc/swift > /dev/null 2>&1
         sudo rm -rf /mnt/gluster-object/test{,2}/* > /dev/null 2>&1
         sudo rm -rf /mnt/gluster-object/gsexpiring/* > /dev/null 2>&1
-        sudo setfattr -x user.swift.metadata /mnt/gluster-object/test{,2} > /dev/null 2>&1
+        sudo setfattr -x user.swift.metadata /mnt/gluster-object/test > /dev/null 2>&1
         sudo setfattr -x user.swift.metadata /mnt/gluster-object/gsexpiring > /dev/null 2>&1
 }
 
@@ -55,7 +55,7 @@ if [ -x /etc/swift ] ; then
 fi
 
 # Check the directories exist
-DIRS="/mnt/gluster-object /mnt/gluster-object/test /mnt/gluster-object/test2 /mnt/gluster-object/gsexpiring"
+DIRS="/mnt/gluster-object /mnt/gluster-object/test /mnt/gluster-object/gsexpiring"
 for d in $DIRS ; do
 	if [ ! -x $d ] ; then
 		quit "$d must exist on an XFS or GlusterFS volume"

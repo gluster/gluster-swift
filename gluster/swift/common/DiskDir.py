@@ -559,7 +559,7 @@ class DiskDir(DiskCommon):
                 self.metadata[X_PUT_TIMESTAMP] = (timestamp, 0)
                 write_metadata(self.datadir, self.metadata)
 
-    def delete_object(self, name, timestamp):
+    def delete_object(self, name, timestamp, obj_policy_index):
         # NOOP - should never be called since object file removal occurs
         # within a directory implicitly.
         return

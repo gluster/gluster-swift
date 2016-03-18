@@ -78,6 +78,7 @@ done
 %{_bindir}/gluster-swift-gen-builders
 %{_bindir}/gluster-swift-print-metadata
 %{_bindir}/gluster-swift-migrate-metadata
+%{_bindir}/gluster-swift-object-expirer
 %{_bindir}/gswauth-add-account
 %{_bindir}/gswauth-add-user
 %{_bindir}/gswauth-cleanup-tokens

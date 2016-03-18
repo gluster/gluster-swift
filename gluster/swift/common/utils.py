@@ -556,7 +556,7 @@ def dir_is_object(metadata):
     return metadata.get(X_OBJECT_TYPE, "") == DIR_OBJECT
 
 
-def rmobjdir(dir_path):
+def rmobjdir(dir_path, marker_dir_check=True):
     """
     Removes the directory as long as there are no objects stored in it. This
     works for containers also.
@@ -580,18 +580,19 @@ def rmobjdir(dir_path):
         for directory in dirs:
             fullpath = os.path.join(path, directory)
 
-            try:
-                metadata = read_metadata(fullpath)
-            except GlusterFileSystemIOError as err:
-                if err.errno in (errno.ENOENT, errno.ESTALE):
-                    # Ignore removal from another entity.
-                    continue
-                raise
-            else:
-                if dir_is_object(metadata):
-                    # Wait, this is an object created by the caller
-                    # We cannot delete
-                    return False
+            if marker_dir_check:
+                try:
+                    metadata = read_metadata(fullpath)
+                except GlusterFileSystemIOError as err:
+                    if err.errno in (errno.ENOENT, errno.ESTALE):
+                        # Ignore removal from another entity.
+                        continue
+                    raise
+                else:
+                    if dir_is_object(metadata):
+                        # Wait, this is an object created by the caller
+                        # We cannot delete
+                        return False
 
             # Directory is not an object created by the caller
             # so we can go ahead and delete it.

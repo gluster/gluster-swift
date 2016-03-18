@@ -1,5 +1,8 @@
 [DEFAULT]
 user = root
+# Default gluster mount point to be used for object store,can be changed by
+# setting the following value in {account,container,object}-server.conf files.
+devices = /mnt/gluster-object
 
 [object-expirer]
 user = root

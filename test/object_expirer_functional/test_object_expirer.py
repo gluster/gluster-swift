@@ -15,13 +15,18 @@
 
 import os
 import time
+import logging
 
-from swift.common.manager import Manager
-from swift.common.internal_client import InternalClient
+from gluster.swift.obj.expirer import ObjectExpirer, GlusterSwiftInternalClient
 
-from test.functional.tests import Base, config, Utils
+from swift.common.utils import readconf
+
+from test import get_config
+from test.functional.tests import Base, Utils
 from test.functional.swift_test_client import Account, Connection, \
     ResponseError
+
+config = get_config('func_test')
 
 
 class TestObjectExpirerEnv:
@@ -39,9 +44,12 @@ class TestObjectExpirerEnv:
         cls.file_size = 8
         cls.root_dir = os.path.join('/mnt/gluster-object',
                                 cls.account.conn.storage_url.split('/')[2].split('_')[1])
-        cls.client = InternalClient('/etc/swift/object-expirer.conf',
-                                     'Test Object Expirer', 1)
-        cls.expirer = Manager(['object-expirer'])
+        devices = config.get('devices', '/mnt/gluster-object')
+        cls.client = GlusterSwiftInternalClient('/etc/swift/object-expirer.conf',
+                                                'Test Object Expirer', 1,
+                                                devices=devices)
+        conf = readconf('/etc/swift/object-expirer.conf', 'object-expirer')
+        cls.expirer = ObjectExpirer(conf)
 
 
 class TestObjectExpirer(Base):
@@ -91,7 +99,7 @@ class TestObjectExpirer(Base):
             self.fail("Tracker object not found.")
 
         # Run expirer daemon once.
-        self.env.expirer.once()
+        self.env.expirer.run_once()
 
         # Ensure object is physically deleted from filesystem.
         self.assertFalse(os.path.exists(os.path.join(self.env.root_dir,
@@ -151,7 +159,7 @@ class TestObjectExpirer(Base):
             self.fail("Tracker object not found.")
 
         # Run expirer daemon once.
-        self.env.expirer.once()
+        self.env.expirer.run_once()
 
         # Ensure object is physically deleted from filesystem.
         self.assertFalse(os.path.exists(os.path.join(self.env.root_dir,
@@ -168,7 +176,6 @@ class TestObjectExpirer(Base):
 
         # GET on container should no longer list the object.
         self.assertFalse(obj.name in self.env.container.files())
-
 
     def test_object_expiry_X_Delete_At_POST(self):
 
@@ -221,8 +228,7 @@ class TestObjectExpirer(Base):
             self.fail("Tracker object not found.")
 
         # Run expirer daemon once.
-        self.env.expirer.once()
-        time.sleep(3)
+        self.env.expirer.run_once()
 
         # Ensure object is physically deleted from filesystem.
         self.assertFalse(os.path.exists(os.path.join(self.env.root_dir,
@@ -291,8 +297,7 @@ class TestObjectExpirer(Base):
             self.fail("Tracker object not found.")
 
         # Run expirer daemon once.
-        self.env.expirer.once()
-        time.sleep(3)
+        self.env.expirer.run_once()
 
         # Ensure object is physically deleted from filesystem.
         self.assertFalse(os.path.exists(os.path.join(self.env.root_dir,

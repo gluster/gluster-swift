@@ -461,7 +461,7 @@ class TestContainerBroker(unittest.TestCase):
         self.assert_(broker.empty())
         obj = self._create_file('o.txt')
         self.assert_(not broker.empty())
-        broker.delete_object('o', normalize_timestamp(time()))
+        broker.delete_object('o', normalize_timestamp(time()), 0)
         # delete_object() should be a NOOP
         self.assert_(not broker.empty())
         os.unlink(obj)
