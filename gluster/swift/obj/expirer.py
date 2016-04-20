@@ -20,7 +20,7 @@ import gluster.swift.common.constraints  # noqa
 import errno
 import os
 
-from gluster.swift.common.utils import rmobjdir
+from gluster.swift.common.utils import delete_tracker_object
 
 from swift.obj.expirer import ObjectExpirer as SwiftObjectExpirer
 from swift.common.http import HTTP_NOT_FOUND
@@ -95,45 +95,17 @@ class ObjectExpirer(SwiftObjectExpirer):
         # which has a threadpool of 20 threads (default)
         self.threadpool = ThreadPool(nthreads=0)
 
-    def _delete_tracker_object(self, container, obj):
-        container_path = os.path.join(self.devices,
-                                      self.expiring_objects_account,
-                                      container)
-        tracker_object_path = os.path.join(container_path, obj)
-
-        try:
-            os.unlink(tracker_object_path)
-        except OSError as err:
-            if err.errno in (errno.ENOENT, errno.ESTALE):
-                # Ignore removal from another entity.
-                return
-            elif err.errno == errno.EISDIR:
-                # Handle race: Was a file during crawl, but now it's a
-                # directory. There are no 'directory marker' objects in
-                # gsexpiring volume.
-                return
-            else:
-                raise
-
-        # This part of code is very similar to DiskFile._unlinkold()
-        dirname = os.path.dirname(tracker_object_path)
-        while dirname and dirname != container_path:
-            if not rmobjdir(dirname, marker_dir_check=False):
-                # If a directory with objects has been found, we can stop
-                # garbage collection
-                break
-            else:
-                # Traverse upwards till the root of container
-                dirname = os.path.dirname(dirname)
-
     def pop_queue(self, container, obj):
         """
         In Swift, this method removes tracker object entry directly from
         container database. In gluster-swift, this method deletes tracker
         object directly from filesystem.
         """
-        self.threadpool.force_run_in_thread(self._delete_tracker_object,
-                                            container, obj)
+        container_path = os.path.join(self.devices,
+                                      self.expiring_objects_account,
+                                      container)
+        self.threadpool.force_run_in_thread(delete_tracker_object,
+                                            container_path, obj)
 
     def delete_actual_object(self, actual_obj, timestamp):
         """

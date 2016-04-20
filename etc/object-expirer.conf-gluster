@@ -14,6 +14,14 @@ log_level = INFO
 auto_create_account_prefix = gs
 expiring_objects_account_name = expiring
 
+# The expirer will re-attempt expiring if the source object is not available
+# up to reclaim_age seconds before it gives up and deletes the entry in the
+# queue. In gluster-swift, you'd almost always want to set this to zero.
+reclaim_age = 0
+
+# Do not retry DELETEs on getting 404. Hence default is set to 1.
+request_tries = 1
+
 # The swift-object-expirer daemon will run every 'interval' number of seconds
 # interval = 300
 

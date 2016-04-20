@@ -402,6 +402,37 @@ class TestContainerBroker(unittest.TestCase):
             fp.write("file path: %s\n" % fullname)
         return fullname
 
+    def test_gsexpiring_fake_md(self):
+        # Create account
+        account_path = os.path.join(self.path, "gsexpiring")
+        os.makedirs(account_path)
+
+        # Create container
+        cpath = os.path.join(account_path, "container")
+        os.mkdir(cpath)
+
+        # Create 10 objects in container. These should not reflect in
+        # X-Object-Count.
+        for o in xrange(10):
+            os.mkdir(os.path.join(cpath, str(o)))
+
+        orig_stat = os.stat(cpath)
+        expected_metadata = {
+            'X-Object-Count': (0, 0),
+            'X-Timestamp': ((normalize_timestamp(orig_stat.st_ctime)), 0),
+            'X-Type': ('container', 0),
+            'X-PUT-Timestamp': ((normalize_timestamp(orig_stat.st_mtime)), 0),
+            'X-Bytes-Used': (0, 0)
+        }
+
+        # Create DiskDir instance
+        disk_dir = dd.DiskDir(self.path, 'gsexpiring', account='gsexpiring',
+                              container='container', logger=FakeLogger())
+        self.assertEqual(expected_metadata, disk_dir.metadata)
+        info = disk_dir.get_info()
+        self.assertEqual(info['object_count'], 0)
+        self.assertEqual(info['bytes_used'], 0)
+
     def test_creation(self):
         # Test swift.common.db.ContainerBroker.__init__
         broker = self._get_broker(account='a', container='c')
@@ -814,10 +845,10 @@ class TestContainerBroker(unittest.TestCase):
                                            out_content_type="text/plain")
         self.assertEquals(len(listing), 100)
         for (name, ts, clen, ctype, etag) in listing:
-            self.assertEqual(ts, 0)
+            self.assertEqual(ts, '0')
             self.assertEqual(clen, 0)
-            self.assertEqual(ctype, 0)
-            self.assertEqual(etag, 0)
+            self.assertEqual(ctype, 'text/plain')
+            self.assertEqual(etag, '')
 
         # Check that limit is still honored.
         listing = broker.list_objects_iter(25, '', None, None, '',
@@ -1342,6 +1373,39 @@ class TestDiskAccount(unittest.TestCase):
     def tearDown(self):
         _destroyxattr()
         shutil.rmtree(self.td)
+
+    def test_gsexpiring_fake_md(self):
+        # Create account
+        account_path = os.path.join(self.td, "gsexpiring")
+        os.makedirs(account_path)
+
+        # Create 10 containers - these should not reflect in
+        # X-Container-Count. Also, create 10 objects in each
+        # container. These should not reflect in X-Object-Count.
+        for c in xrange(10):
+            cpath = os.path.join(account_path, str(c))
+            os.mkdir(cpath)
+            for o in xrange(10):
+                os.mkdir(os.path.join(cpath, str(o)))
+
+        orig_stat = os.stat(account_path)
+        expected_metadata = {
+            'X-Object-Count': (0, 0),
+            'X-Container-Count': (0, 0),
+            'X-Timestamp': ((normalize_timestamp(orig_stat.st_ctime)), 0),
+            'X-Type': ('Account', 0),
+            'X-PUT-Timestamp': ((normalize_timestamp(orig_stat.st_mtime)), 0),
+            'X-Bytes-Used': (0, 0)
+        }
+
+        # Create DiskAccount instance
+        da = dd.DiskAccount(self.td, 'gsexpiring', 'gsexpiring',
+                            self.fake_logger)
+        self.assertEqual(expected_metadata, da.metadata)
+        info = da.get_info()
+        self.assertEqual(info['container_count'], 0)
+        self.assertEqual(info['object_count'], 0)
+        self.assertEqual(info['bytes_used'], 0)
 
     def test_constructor_no_metadata(self):
         da = dd.DiskAccount(self.td, self.fake_drives[0],

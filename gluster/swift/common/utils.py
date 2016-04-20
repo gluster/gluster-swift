@@ -370,6 +370,63 @@ def get_container_details(cont_path):
     return obj_list, object_count, bytes_used
 
 
+def list_objects_gsexpiring_container(container_path):
+    """
+    This method does a simple walk, unlike get_container_details which
+    walks the filesystem tree and does a getxattr() on every directory
+    to check if it's a directory marker object and stat() on every file
+    to get it's size. These are not required for gsexpiring volume as
+    it can never have directory marker objects in it and all files are
+    zero-byte in size.
+    """
+    obj_list = []
+
+    for (root, dirs, files) in os.walk(container_path):
+        for f in files:
+            obj_path = os.path.join(root, f)
+            obj = obj_path[(len(container_path) + 1):]
+            obj_list.append(obj)
+        # Yield the co-routine cooperatively
+        sleep()
+
+    return obj_list
+
+
+def delete_tracker_object(container_path, obj):
+    """
+    Delete zero-byte tracker object from gsexpiring volume.
+    Called by:
+        - gluster.swift.obj.expirer.ObjectExpirer.pop_queue()
+        - gluster.swift.common.DiskDir.DiskDir.delete_object()
+    """
+    tracker_object_path = os.path.join(container_path, obj)
+
+    try:
+        os.unlink(tracker_object_path)
+    except OSError as err:
+        if err.errno in (errno.ENOENT, errno.ESTALE):
+            # Ignore removal from another entity.
+            return
+        elif err.errno == errno.EISDIR:
+            # Handle race: Was a file during crawl, but now it's a
+            # directory. There are no 'directory marker' objects in
+            # gsexpiring volume.
+            return
+        else:
+            raise
+
+    # This part of code is very similar to DiskFile._unlinkold()
+    dirname = os.path.dirname(tracker_object_path)
+    while dirname and dirname != container_path:
+        if not rmobjdir(dirname, marker_dir_check=False):
+            # If a directory with objects has been found, we can stop
+            # garbage collection
+            break
+        else:
+            # Traverse upwards till the root of container
+            dirname = os.path.dirname(dirname)
+
+
 def get_account_details(acc_path):
     """
     Return container_list and container_count.

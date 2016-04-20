@@ -17,19 +17,22 @@ import os
 import errno
 
 from gluster.swift.common.fs_utils import dir_empty, mkdirs, do_chown, \
-    do_exists, do_touch
+    do_exists, do_touch, do_stat
 from gluster.swift.common.utils import validate_account, validate_container, \
     get_container_details, get_account_details, create_container_metadata, \
     create_account_metadata, DEFAULT_GID, get_container_metadata, \
     get_account_metadata, DEFAULT_UID, validate_object, \
     create_object_metadata, read_metadata, write_metadata, X_CONTENT_TYPE, \
     X_CONTENT_LENGTH, X_TIMESTAMP, X_PUT_TIMESTAMP, X_ETAG, X_OBJECTS_COUNT, \
-    X_BYTES_USED, X_CONTAINER_COUNT, DIR_TYPE, rmobjdir, dir_is_object
+    X_BYTES_USED, X_CONTAINER_COUNT, DIR_TYPE, rmobjdir, dir_is_object, \
+    list_objects_gsexpiring_container, normalize_timestamp
 from gluster.swift.common import Glusterfs
 from gluster.swift.common.exceptions import FileOrDirNotFoundError, \
     GlusterFileSystemIOError
+from gluster.swift.obj.expirer import delete_tracker_object
 from swift.common.constraints import MAX_META_COUNT, MAX_META_OVERALL_SIZE
 from swift.common.swob import HTTPBadRequest
+from swift.common.utils import ThreadPool
 
 
 DATADIR = 'containers'
@@ -175,6 +178,12 @@ class DiskCommon(object):
         self.account = account
         self.datadir = os.path.join(root, drive)
         self._dir_exists = None
+
+        # nthread=0 is intentional. This ensures that no green pool is
+        # used. Call to force_run_in_thread() will ensure that the method
+        # passed as arg is run in a real external thread using eventlet.tpool
+        # which has a threadpool of 20 threads (default)
+        self.threadpool = ThreadPool(nthreads=0)
 
     def _dir_exists_read_metadata(self):
         self._dir_exists = do_exists(self.datadir)
@@ -342,6 +351,24 @@ class DiskDir(DiskCommon):
         self.container = container
         self.datadir = os.path.join(self.datadir, self.container)
 
+        if self.account == 'gsexpiring':
+            # Do not bother crawling the entire container tree just to update
+            # object count and bytes used. Return immediately before metadata
+            # validation and creation happens.
+            info = do_stat(self.datadir)
+            if not info:
+                # Container no longer exists.
+                return
+            semi_fake_md = {
+                'X-Object-Count': (0, 0),
+                'X-Timestamp': ((normalize_timestamp(info.st_ctime)), 0),
+                'X-Type': ('container', 0),
+                'X-PUT-Timestamp': ((normalize_timestamp(info.st_mtime)), 0),
+                'X-Bytes-Used': (0, 0)
+            }
+            self.metadata = semi_fake_md
+            return
+
         if not self._dir_exists_read_metadata():
             return
 
@@ -387,7 +414,10 @@ class DiskDir(DiskCommon):
 
         container_list = []
 
-        objects = self._update_object_count()
+        if self.account == 'gsexpiring':
+            objects = list_objects_gsexpiring_container(self.datadir)
+        else:
+            objects = self._update_object_count()
         if objects:
             objects.sort()
         else:
@@ -419,12 +449,23 @@ class DiskDir(DiskCommon):
                 objects = filter_delimiter(objects, delimiter, prefix, marker,
                                            path)
 
-        if out_content_type == 'text/plain':
+        if out_content_type == 'text/plain' or \
+                self.account == 'gsexpiring':
+            # When out_content_type == 'text/plain':
+            #
             # The client is only asking for a plain list of objects and NOT
             # asking for any extended information about objects such as
             # bytes used or etag.
+            #
+            # When self.account == 'gsexpiring':
+            #
+            # This is a JSON request sent by the object expirer to list
+            # tracker objects in a container in gsexpiring volume.
+            # When out_content_type is 'application/json', the caller
+            # expects each record entry to have the following ordered
+            # fields: (name, timestamp, size, content_type, etag)
             for obj in objects:
-                container_list.append((obj, 0, 0, 0, 0))
+                container_list.append((obj, '0', 0, 'text/plain', ''))
                 if len(container_list) >= limit:
                         break
             return container_list
@@ -498,7 +539,8 @@ class DiskDir(DiskCommon):
                       reported_put_timestamp, reported_delete_timestamp,
                       reported_object_count, and reported_bytes_used.
         """
-        if self._dir_exists and Glusterfs._container_update_object_count:
+        if self._dir_exists and Glusterfs._container_update_object_count and \
+                self.account != 'gsexpiring':
             self._update_object_count()
 
         data = {'account': self.account, 'container': self.container,
@@ -560,9 +602,15 @@ class DiskDir(DiskCommon):
                 write_metadata(self.datadir, self.metadata)
 
     def delete_object(self, name, timestamp, obj_policy_index):
-        # NOOP - should never be called since object file removal occurs
-        # within a directory implicitly.
-        return
+        if self.account == 'gsexpiring':
+            # The request originated from object expirer. This should
+            # delete tracker object.
+            self.threadpool.force_run_in_thread(delete_tracker_object,
+                                                self.datadir, name)
+        else:
+            # NOOP - should never be called since object file removal occurs
+            # within a directory implicitly.
+            return
 
     def delete_db(self, timestamp):
         """
@@ -625,6 +673,22 @@ class DiskAccount(DiskCommon):
     def __init__(self, root, drive, account, logger, **kwargs):
         super(DiskAccount, self).__init__(root, drive, account, logger,
                                           **kwargs)
+
+        if self.account == 'gsexpiring':
+            # Do not bother updating object count, container count and bytes
+            # used. Return immediately before metadata validation and
+            # creation happens.
+            info = do_stat(self.datadir)
+            semi_fake_md = {
+                'X-Object-Count': (0, 0),
+                'X-Container-Count': (0, 0),
+                'X-Timestamp': ((normalize_timestamp(info.st_ctime)), 0),
+                'X-Type': ('Account', 0),
+                'X-PUT-Timestamp': ((normalize_timestamp(info.st_mtime)), 0),
+                'X-Bytes-Used': (0, 0)
+            }
+            self.metadata = semi_fake_md
+            return
 
         # Since accounts should always exist (given an account maps to a
         # gluster volume directly, and the mount has already been checked at
@@ -750,10 +814,20 @@ class DiskAccount(DiskCommon):
                 containers = filter_delimiter(containers, delimiter, prefix,
                                               marker)
 
-        if response_content_type == 'text/plain':
+        if response_content_type == 'text/plain' or \
+                self.account == 'gsexpiring':
+            # When response_content_type == 'text/plain':
+            #
             # The client is only asking for a plain list of containers and NOT
             # asking for any extended information about container such as
             # bytes used or object count.
+            #
+            # When self.account == 'gsexpiring':
+            # This is a JSON request sent by the object expirer to list
+            # containers in gsexpiring volume. When out_content_type is
+            # 'application/json', the caller expects each record entry to have
+            # the following ordered fields:
+            # (name, object_count, bytes_used, is_subdir)
             for container in containers:
                 # When response_content_type == 'text/plain', Swift will only
                 # consume the name of the container (first element of tuple).
@@ -796,7 +870,8 @@ class DiskAccount(DiskCommon):
                   delete_timestamp, container_count, object_count,
                   bytes_used, hash, id
         """
-        if Glusterfs._account_update_container_count:
+        if Glusterfs._account_update_container_count and \
+                self.account != 'gsexpiring':
             self._update_container_count()
 
         data = {'account': self.account, 'created_at': '1',
