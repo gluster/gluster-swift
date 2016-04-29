@@ -27,7 +27,7 @@ from uuid import uuid4
 from eventlet import sleep
 from contextlib import contextmanager
 from gluster.swift.common.exceptions import AlreadyExistsAsFile, \
-    AlreadyExistsAsDir
+    AlreadyExistsAsDir, DiskFileContainerDoesNotExist
 from swift.common.utils import ThreadPool
 from swift.common.exceptions import DiskFileNotExist, DiskFileError, \
     DiskFileNoSpace, DiskFileDeviceUnavailable, DiskFileNotOpen, \
@@ -297,8 +297,13 @@ class DiskFileWriter(object):
             try:
                 do_rename(self._tmppath, df._data_file)
             except OSError as err:
-                if err.errno in (errno.ENOENT, errno.EIO) \
+                if err.errno in (errno.ENOENT, errno.EIO,
+                                 errno.EBUSY, errno.ESTALE) \
                         and attempts < MAX_RENAME_ATTEMPTS:
+                    # Some versions of GlusterFS had rename() as non-blocking
+                    # operation. So we check for STALE and EBUSY. This was
+                    # fixed recently: http://review.gluster.org/#/c/13366/
+                    # The comment that follows is for ENOENT and EIO...
                     # FIXME: Why either of these two error conditions is
                     # happening is unknown at this point. This might be a
                     # FUSE issue of some sort or a possible race
@@ -388,7 +393,7 @@ class DiskFileWriter(object):
 
         df._threadpool.force_run_in_thread(self._finalize_put, metadata)
 
-        # Avoid the unlink() system call as part of the mkstemp context
+        # Avoid the unlink() system call as part of the create() context
         # cleanup
         self._tmppath = None
 
@@ -556,6 +561,8 @@ class DiskFile(object):
         self._is_dir = False
         self._metadata = None
         self._fd = None
+        # This fd attribute is not used in PUT path. fd used in PUT path
+        # is encapsulated inside DiskFileWriter object.
         self._stat = None
         # Don't store a value for data_file until we know it exists.
         self._data_file = None
@@ -841,6 +848,7 @@ class DiskFile(object):
 
         # Assume the full directory path exists to the file already, and
         # construct the proper name for the temporary file.
+        fd = None
         attempts = 1
         while True:
             tmpfile = '.' + self._obj + '.' + uuid4().hex
@@ -865,7 +873,7 @@ class DiskFile(object):
                 if attempts >= MAX_OPEN_ATTEMPTS:
                     # We failed after N attempts to create the temporary
                     # file.
-                    raise DiskFileError('DiskFile.mkstemp(): failed to'
+                    raise DiskFileError('DiskFile.create(): failed to'
                                         ' successfully create a temporary file'
                                         ' without running into a name conflict'
                                         ' after %d of %d attempts for: %s' % (
@@ -878,24 +886,41 @@ class DiskFile(object):
                     # FIXME: Possible FUSE issue or race condition, let's
                     # sleep on it and retry the operation.
                     _random_sleep()
-                    logging.warn("DiskFile.mkstemp(): %s ... retrying in"
+                    logging.warn("DiskFile.create(): %s ... retrying in"
                                  " 0.1 secs", gerr)
                     attempts += 1
                 elif not self._obj_path:
+                    # ENOENT
                     # No directory hierarchy and the create failed telling us
                     # the container or volume directory does not exist. This
                     # could be a FUSE issue or some race condition, so let's
                     # sleep a bit and retry.
+                    # Handle race:
+                    # This can be the issue when memcache has cached that the
+                    # container exists. If someone removes the container dir
+                    # from filesystem, it's not reflected in memcache. So
+                    # swift reports that the container exists and this code
+                    # tries to create a file in a directory that does not
+                    # exist. However, it's wrong to create the container here.
                     _random_sleep()
-                    logging.warn("DiskFile.mkstemp(): %s ... retrying in"
+                    logging.warn("DiskFile.create(): %s ... retrying in"
                                  " 0.1 secs", gerr)
                     attempts += 1
+                    if attempts > 2:
+                        # Ideally we would want to return 404 indicating that
+                        # the container itself does not exist. Can't be done
+                        # though as the caller won't catch DiskFileNotExist.
+                        # We raise an exception with a meaningful name for
+                        # correctness.
+                        logging.warn("Container dir %s does not exist",
+                                     self._container_path)
+                        raise DiskFileContainerDoesNotExist
                 elif attempts > 1:
                     # Got ENOENT after previously making the path. This could
                     # also be a FUSE issue or some race condition, nap and
                     # retry.
                     _random_sleep()
-                    logging.warn("DiskFile.mkstemp(): %s ... retrying in"
+                    logging.warn("DiskFile.create(): %s ... retrying in"
                                  " 0.1 secs" % gerr)
                     attempts += 1
                 else:
@@ -913,11 +938,14 @@ class DiskFile(object):
             # it completely since at the time of this writing FUSE does not
             # support it.
             dw = DiskFileWriter(fd, tmppath, self)
+            # It's now the responsibility of DiskFileWriter to close this fd.
+            fd = None
             yield dw
         finally:
-            dw.close()
-            if dw._tmppath:
-                do_unlink(dw._tmppath)
+            if dw:
+                dw.close()
+                if dw._tmppath:
+                    do_unlink(dw._tmppath)
 
     def write_metadata(self, metadata):
         """

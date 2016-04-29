@@ -44,3 +44,7 @@ class AlreadyExistsAsDir(GlusterfsException):
 
 class AlreadyExistsAsFile(GlusterfsException):
     pass
+
+
+class DiskFileContainerDoesNotExist(GlusterfsException):
+    pass
