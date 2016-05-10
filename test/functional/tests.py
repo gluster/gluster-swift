@@ -2200,7 +2200,6 @@ class TestSlo(Base):
     set_up = False
 
     def setUp(self):
-	raise SkipTest("SLO not enabled yet in gluster-swift")
         super(TestSlo, self).setUp()
         if self.env.slo_enabled is False:
             raise SkipTest("SLO not enabled")
