@@ -810,9 +810,19 @@ class TestUtils(unittest.TestCase):
               utils.X_CONTENT_LENGTH: '12345',
               utils.X_TYPE: utils.OBJECT,
               utils.X_OBJECT_TYPE: 'na'}
-        fake_stat = Mock(st_size=12346)
+        fake_stat = Mock(st_size=12346, st_mode=33188)
         self.assertFalse(utils.validate_object(md, fake_stat))
-        fake_stat = Mock(st_size=12345)
+        fake_stat = Mock(st_size=12345, st_mode=33188)
+        self.assertTrue(utils.validate_object(md, fake_stat))
+
+    def test_validate_object_marker_dir(self):
+        md = {utils.X_TIMESTAMP: 'na',
+              utils.X_CONTENT_TYPE: 'application/directory',
+              utils.X_ETAG: 'bad',
+              utils.X_CONTENT_LENGTH: '0',
+              utils.X_TYPE: utils.OBJECT,
+              utils.X_OBJECT_TYPE: utils.DIR_OBJECT}
+        fake_stat = Mock(st_size=4096, st_mode=16744)
         self.assertTrue(utils.validate_object(md, fake_stat))
 
 

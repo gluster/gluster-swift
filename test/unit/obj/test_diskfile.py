@@ -163,7 +163,6 @@ class TestDiskFile(unittest.TestCase):
         assert gdf._obj_path == ""
         assert gdf._put_datadir == os.path.join(self.td, "vol0", "bar"), gdf._put_datadir
         assert gdf._data_file == os.path.join(self.td, "vol0", "bar", "z")
-        assert gdf._is_dir is False
         assert gdf._fd is None
 
     def test_constructor_leadtrail_slash(self):
@@ -193,10 +192,8 @@ class TestDiskFile(unittest.TestCase):
         assert gdf._fd is None
         assert gdf._disk_file_open is False
         assert gdf._metadata is None
-        assert not gdf._is_dir
         with gdf.open():
             assert gdf._data_file == the_file
-            assert not gdf._is_dir
             assert gdf._fd is not None
             assert gdf._metadata == exp_md
             assert gdf._disk_file_open is True
@@ -224,7 +221,6 @@ class TestDiskFile(unittest.TestCase):
         assert gdf._fd is None
         assert gdf._disk_file_open is False
         assert gdf._metadata is None
-        assert not gdf._is_dir
 
         # Case 1
         # Ensure that reading metadata for non-GET requests
@@ -285,9 +281,7 @@ class TestDiskFile(unittest.TestCase):
         assert gdf._fd is None
         assert gdf._metadata is None
         assert gdf._disk_file_open is False
-        assert not gdf._is_dir
         with gdf.open():
-            assert not gdf._is_dir
             assert gdf._data_file == the_file
             assert gdf._fd is not None
             assert gdf._metadata == exp_md, "%r != %r" % (gdf._metadata, exp_md)
@@ -308,7 +302,6 @@ class TestDiskFile(unittest.TestCase):
         _metadata[_mapit(the_file)] = inv_md
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "z")
         assert gdf._obj == "z"
-        assert not gdf._is_dir
         assert gdf._fd is None
         assert gdf._disk_file_open is False
         with gdf.open():
@@ -334,10 +327,8 @@ class TestDiskFile(unittest.TestCase):
         del exp_md['X-Object-Type']
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "d")
         assert gdf._obj == "d"
-        assert gdf._is_dir is False
         assert gdf._disk_file_open is False
         with gdf.open():
-            assert gdf._is_dir
             assert gdf._data_file == the_dir
             assert gdf._disk_file_open is True
         assert gdf._disk_file_open is False
@@ -353,7 +344,6 @@ class TestDiskFile(unittest.TestCase):
             fd.write("y" * fsize)
         gdf = self._get_diskfile(dev, par, acc, con, obj)
         assert gdf._obj == base_obj
-        assert not gdf._is_dir
         assert gdf._fd is None
         return gdf
 
@@ -865,7 +855,6 @@ class TestDiskFile(unittest.TestCase):
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "z")
         assert gdf._obj == "z"
         assert gdf._data_file == the_file
-        assert not gdf._is_dir
         later = float(gdf.read_metadata()['X-Timestamp']) + 1
         gdf.delete(normalize_timestamp(later))
         assert os.path.isdir(gdf._put_datadir)
@@ -880,7 +869,6 @@ class TestDiskFile(unittest.TestCase):
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "z")
         assert gdf._obj == "z"
         assert gdf._data_file == the_file
-        assert not gdf._is_dir
         now = float(gdf.read_metadata()['X-Timestamp'])
         gdf.delete(normalize_timestamp(now))
         assert os.path.isdir(gdf._put_datadir)
@@ -895,7 +883,6 @@ class TestDiskFile(unittest.TestCase):
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "z")
         assert gdf._obj == "z"
         assert gdf._data_file == the_file
-        assert not gdf._is_dir
         later = float(gdf.read_metadata()['X-Timestamp']) + 1
 
         # Handle the case the file is not in the directory listing.
@@ -914,7 +901,6 @@ class TestDiskFile(unittest.TestCase):
         gdf = self._get_diskfile("vol0", "p57", "ufo47", "bar", "z")
         assert gdf._obj == "z"
         assert gdf._data_file == the_file
-        assert not gdf._is_dir
 
         later = float(gdf.read_metadata()['X-Timestamp']) + 1
 

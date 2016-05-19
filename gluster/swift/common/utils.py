@@ -275,7 +275,7 @@ def validate_account(metadata):
     return False
 
 
-def validate_object(metadata, stat=None):
+def validate_object(metadata, statinfo=None):
     if not metadata:
         return False
 
@@ -287,11 +287,14 @@ def validate_object(metadata, stat=None):
        X_OBJECT_TYPE not in metadata.keys():
         return False
 
-    if stat and (int(metadata[X_CONTENT_LENGTH]) != stat.st_size):
+    if statinfo and stat.S_ISREG(statinfo.st_mode):
+
         # File length has changed.
+        if int(metadata[X_CONTENT_LENGTH]) != statinfo.st_size:
+            return False
+
         # TODO: Handle case where file content has changed but the length
         # remains the same.
-        return False
 
     if metadata[X_TYPE] == OBJECT:
         return True

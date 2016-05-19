@@ -88,8 +88,7 @@ def make_directory(full_path, uid, gid, metadata=None):
                                     " path failed (%s)" % (full_path,
                                                            str(serr)))
             else:
-                is_dir = stat.S_ISDIR(stats.st_mode)
-                if not is_dir:
+                if not stat.S_ISDIR(stats.st_mode):
                     # FIXME: Ideally we'd want to return an appropriate error
                     # message and code in the PUT Object REST API response.
                     raise AlreadyExistsAsFile("make_directory:"
@@ -134,8 +133,7 @@ def make_directory(full_path, uid, gid, metadata=None):
                     raise DiskFileError(errmsg)
                 else:
                     # The directory at least exists now
-                    is_dir = stat.S_ISDIR(stats.st_mode)
-                    if is_dir:
+                    if stat.S_ISDIR(stats.st_mode):
                         # Dump the stats to the log with the original exception
                         logging.warn("make_directory: mkdir initially"
                                      " failed on path %s (%s) but a stat()"
@@ -339,8 +337,7 @@ class DiskFileWriter(object):
                                 ' longer exists (targeted for %s)' % (
                                     df._put_datadir, df._data_file))
                         else:
-                            is_dir = stat.S_ISDIR(dfstats.st_mode)
-                            if not is_dir:
+                            if not stat.S_ISDIR(dfstats.st_mode):
                                 raise DiskFileError(
                                     'DiskFile.put(): path to object, %s,'
                                     ' no longer a directory (targeted for'
@@ -387,7 +384,7 @@ class DiskFileWriter(object):
                 df._create_dir_object, df._data_file, metadata)
             return
 
-        if df._is_dir:
+        if df._stat and stat.S_ISDIR(df._stat.st_mode):
             # A pre-existing directory already exists on the file
             # system, perhaps gratuitously created when another
             # object was created, or created externally to Swift
@@ -563,7 +560,6 @@ class DiskFile(object):
         self._threadpool = threadpool or ThreadPool(nthreads=0)
         self._uid = int(uid)
         self._gid = int(gid)
-        self._is_dir = False
         self._metadata = None
         self._fd = None
         # This fd attribute is not used in PUT path. fd used in PUT path
@@ -622,7 +618,6 @@ class DiskFile(object):
         try:
             if not self._stat:
                 self._stat = do_fstat(self._fd)
-            self._is_dir = stat.S_ISDIR(self._stat.st_mode)
             obj_size = self._stat.st_size
 
             if not self._metadata:
@@ -633,7 +628,7 @@ class DiskFile(object):
             assert self._metadata is not None
             self._filter_metadata()
 
-            if self._is_dir:
+            if stat.S_ISDIR(self._stat.st_mode):
                 do_close(self._fd)
                 obj_size = 0
                 self._fd = -1
@@ -1042,7 +1037,7 @@ class DiskFile(object):
         return metadata
 
     def _unlinkold(self):
-        if self._is_dir:
+        if self._stat and stat.S_ISDIR(self._stat.st_mode):
             # Marker, or object, directory.
             #
             # Delete from the filesystem only if it contains no objects.
@@ -1052,7 +1047,7 @@ class DiskFile(object):
             # container or parent directory is deleted.
             #
             # FIXME: Ideally we should use an atomic metadata update operation
-            metadata = read_metadata(self._data_file)
+            metadata = self._metadata or read_metadata(self._data_file)
             if dir_is_object(metadata):
                 metadata[X_OBJECT_TYPE] = DIR_NON_OBJECT
                 write_metadata(self._data_file, metadata)
