@@ -28,10 +28,17 @@ from gluster.swift.common.exceptions import GlusterFileSystemIOError
 from swift.common.exceptions import DiskFileNoSpace
 from swift.common.db import utf8encodekeys
 from gluster.swift.common.fs_utils import do_getctime, do_getmtime, do_stat, \
-    do_listdir, do_walk, do_rmdir, do_log_rl, get_filename_from_fd, do_open, \
+    do_rmdir, do_log_rl, get_filename_from_fd, do_open, \
     do_isdir, do_getsize, do_getxattr, do_setxattr, do_removexattr, do_read, \
     do_close, do_dup, do_lseek, do_fstat, do_fsync, do_rename
 from gluster.swift.common import Glusterfs
+
+try:
+    import scandir
+    scandir_present = True
+except ImportError:
+    scandir_present = False
+
 
 X_CONTENT_TYPE = 'Content-Type'
 X_CONTENT_LENGTH = 'Content-Length'
@@ -306,6 +313,8 @@ def validate_object(metadata, statinfo=None):
 
 def _update_list(path, cont_path, src_list, reg_file=True, object_count=0,
                  bytes_used=0, obj_list=[]):
+    if isinstance(path, unicode):
+        path = path.encode('utf-8')
     # strip the prefix off, also stripping the leading and trailing slashes
     obj_path = path.replace(cont_path, '').strip(os.path.sep)
 
@@ -363,7 +372,7 @@ def get_container_details(cont_path):
     obj_list = []
 
     if do_isdir(cont_path):
-        for (path, dirs, files) in do_walk(cont_path):
+        for (path, dirs, files) in gf_walk(cont_path):
             object_count, bytes_used = update_list(path, cont_path, dirs,
                                                    files, object_count,
                                                    bytes_used, obj_list)
@@ -436,16 +445,11 @@ def get_account_details(acc_path):
     """
     container_list = []
 
-    if do_isdir(acc_path):
-        for name in do_listdir(acc_path):
-            if name.lower() == TEMP_DIR \
-                    or name.lower() == ASYNCDIR \
-                    or name.lower() == TRASHCAN \
-                    or not do_isdir(os.path.join(acc_path, name)):
-                # Do not include .async_pending, .trashcan and all
-                # non-directories in containers list
-                continue
-            container_list.append(name)
+    if os.path.isdir(acc_path):
+        for entry in gf_listdir(acc_path):
+            if entry.is_dir() and \
+                    entry.name not in (TEMP_DIR, ASYNCDIR, TRASHCAN):
+                container_list.append(entry.name)
 
     return container_list, len(container_list)
 
@@ -636,7 +640,7 @@ def rmobjdir(dir_path, marker_dir_check=True):
     # We have a directory that is not empty, walk it to see if it is filled
     # with empty sub-directories that are not user created objects
     # (gratuitously created as a result of other object creations).
-    for (path, dirs, files) in do_walk(dir_path, topdown=False):
+    for (path, dirs, files) in gf_walk(dir_path, topdown=False):
         for directory in dirs:
             fullpath = os.path.join(path, directory)
 
@@ -717,3 +721,89 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
         fo.flush()
         do_fsync(fo)
     do_rename(tmppath, dest)
+
+
+DT_UNKNOWN = 0
+DT_DIR = 4
+
+
+class SmallDirEntry(object):
+    """
+    This class is an essential subset of DirEntry class from Python 3.5
+    https://docs.python.org/3.5/library/os.html#os.DirEntry
+    """
+    __slots__ = ('name', '_d_type', '_path', '_stat')
+
+    def __init__(self, path, name, d_type):
+        self.name = name
+        self._path = path  # Parent directory
+        self._d_type = d_type
+        self._stat = None  # Populated only if is_dir() is invoked.
+
+    def is_dir(self):
+        if self._d_type == DT_UNKNOWN:
+            try:
+                if not self._stat:
+                    self._stat = os.lstat(os.path.join(self._path, self.name))
+            except OSError as err:
+                if err.errno != errno.ENOENT:
+                    raise
+                return False
+            return stat.S_ISDIR(self._stat.st_mode)
+        else:
+            return self._d_type == DT_DIR
+
+
+def gf_listdir(path):
+    if scandir_present:
+        for entry in scandir.scandir(path):
+            yield entry
+    else:
+        for name in os.listdir(path):
+            yield SmallDirEntry(path, name, DT_UNKNOWN)
+
+
+def _walk(top, topdown=True, onerror=None, followlinks=False):
+    """
+    This is very similar to os.walk() implementation present in Python 2.7.11
+    (https://hg.python.org/cpython/file/v2.7.11/Lib/os.py#l209) but with the
+    following differences:
+        * This internally uses scandir which is a directory iterator instead
+          of os.listdir which returns an actual list.
+        * Makes no stat() calls. To do so, it deliberately chooses to ignore
+          https://bugs.python.org/issue23605#msg237775 issue.
+    """
+    dirs = []  # List of DirEntry objects
+    nondirs = []  # List of names (strings)
+
+    try:
+        for entry in scandir.scandir(top):
+            if entry.is_dir():
+                dirs.append(entry)
+            else:
+                nondirs.append(entry.name)
+    except OSError as err:
+        # As entries_iter is not a list and is a true iterator, it can raise
+        # an exception and blow-up. The try-except block here is to handle it
+        # gracefully and return.
+        if onerror is not None:
+            onerror(err)
+        return
+
+    if topdown:
+        yield top, [d.name for d in dirs], nondirs
+
+    for directory in dirs:
+        if followlinks or not directory.is_symlink():
+            new_path = os.path.join(top, directory.name)
+            for x in _walk(new_path, topdown, onerror, followlinks):
+                yield x
+
+    if not topdown:
+        yield top, [d.name for d in dirs], nondirs
+
+
+if scandir_present:
+    gf_walk = _walk
+else:
+    gf_walk = os.walk

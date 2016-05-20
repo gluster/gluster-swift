@@ -10,3 +10,7 @@ pastedeploy>=1.3.3
 simplejson>=2.0.9
 xattr>=0.4
 PyECLib==1.0.7                           # BSD
+
+# gluster-swift specific requirements
+prettytable     # needed by gswauth
+scandir>=1.3

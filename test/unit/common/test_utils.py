@@ -34,6 +34,14 @@ from gluster.swift.common.exceptions import GlusterFileSystemOSError,\
     GlusterFileSystemIOError
 from swift.common.exceptions import DiskFileNoSpace
 
+from nose import SkipTest
+
+try:
+    import scandir
+    scandir_present = True
+except ImportError:
+    scandir_present = False
+
 #
 # Somewhat hacky way of emulating the operation of xattr calls. They are made
 # against a dictionary that stores the xattr key/value pairs.
@@ -1047,3 +1055,41 @@ class TestUtilsDirObjects(unittest.TestCase):
                 self.fail("Expected OSError")
         finally:
             utils.do_rmdir = _orig_rm
+
+    def test_gf_listdir(self):
+        for entry in utils.gf_listdir(self.rootdir):
+            if scandir_present:
+                self.assertFalse(isinstance(entry, utils.SmallDirEntry))
+            else:
+                self.assertTrue(isinstance(entry, utils.SmallDirEntry))
+            if entry.name in ('dir1'):
+                self.assertTrue(entry.is_dir())
+                if not scandir_present:
+                    self.assertEqual(entry._d_type, utils.DT_UNKNOWN)
+            elif entry.name in ('file1', 'file2'):
+                self.assertFalse(entry.is_dir())
+
+
+class TestSmallDirEntry(unittest.TestCase):
+
+    def test_does_stat_when_no_d_type(self):
+        e = utils.SmallDirEntry('/root/path', 'name', utils.DT_UNKNOWN)
+        mock_os_lstat = Mock(return_value=Mock(st_mode=16744))
+        with patch('os.lstat', mock_os_lstat):
+            self.assertTrue(e.is_dir())
+            self.assertTrue(e._stat)  # Make sure stat gets populated
+        mock_os_lstat.assert_called_once_with('/root/path/name')
+
+        # Subsequent calls to is_dir() should not call os.lstat()
+        mock_os_lstat.reset_mock()
+        with patch('os.lstat', mock_os_lstat):
+            self.assertTrue(e._stat)  # Make sure stat is already populated
+            self.assertTrue(e.is_dir())
+        self.assertFalse(mock_os_lstat.called)
+
+    def test_is_dir_file_not_present_should_return_false(self):
+        e = utils.SmallDirEntry('/root/path', 'name', utils.DT_UNKNOWN)
+        mock_os_lstat = Mock(side_effect=OSError(errno.ENOENT,
+                                                 os.strerror(errno.ENOENT)))
+        with patch('os.lstat', mock_os_lstat):
+            self.assertFalse(e.is_dir())
