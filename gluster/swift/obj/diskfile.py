@@ -571,6 +571,8 @@ class DiskFile(object):
         self._stat = None
         # Don't store a value for data_file until we know it exists.
         self._data_file = None
+        # This is used to avoid unlink() on a file that does not exist.
+        self._disk_file_does_not_exist = False
 
         self._account = account  # Unused, account = volume
         self._container = container
@@ -752,6 +754,7 @@ class DiskFile(object):
             self._metadata = read_metadata(self._data_file)
         except (OSError, IOError) as err:
             if err.errno in (errno.ENOENT, errno.ESTALE):
+                self._disk_file_does_not_exist = True
                 raise DiskFileNotExist
             raise err
 
@@ -762,6 +765,7 @@ class DiskFile(object):
             self._stat = do_stat(self._data_file)
         except (OSError, IOError) as err:
             if err.errno in (errno.ENOENT, errno.ESTALE):
+                self._disk_file_does_not_exist = True
                 raise DiskFileNotExist
             raise err
 
@@ -1087,10 +1091,18 @@ class DiskFile(object):
         :raises DiskFileError: this implementation will raise the same
                             errors as the `create()` method.
         """
+        if self._disk_file_does_not_exist:
+            # It was determined during disk_file.read_metadata() call that
+            # the file does not exist. Don't proceed with deletion on a
+            # non-existing path.
+            return
+
         try:
             metadata = self._metadata or read_metadata(self._data_file)
         except (IOError, OSError) as err:
-            if err.errno not in (errno.ESTALE, errno.ENOENT):
+            if err.errno in (errno.ESTALE, errno.ENOENT):
+                return
+            else:
                 raise
         else:
             if metadata[X_TIMESTAMP] >= timestamp:

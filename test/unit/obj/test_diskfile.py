@@ -1142,3 +1142,31 @@ class TestDiskFile(unittest.TestCase):
         self.assertFalse(_m_do_fchown.called)
         assert os.path.exists(gdf._data_file)
         assert not os.path.exists(tmppath)
+
+    def test_unlink_not_called_on_non_existent_object(self):
+        # Create container dir
+        cpath = os.path.join(self.td, "vol0", "container")
+        os.makedirs(cpath)
+        self.assertTrue(os.path.exists(cpath))
+
+        # This file does not exist
+        obj_path = os.path.join(cpath, "object")
+        self.assertFalse(os.path.exists(obj_path))
+
+        # Create diskfile instance and check attribute initialization
+        gdf = self._get_diskfile("vol0", "p57", "ufo47", "container", "object")
+        assert gdf._obj == "object"
+        assert gdf._data_file == obj_path
+        self.assertFalse(gdf._disk_file_does_not_exist)
+
+        # Simulate disk file call sequence issued during DELETE request.
+        # And confirm that read_metadata() and unlink() is not called.
+        self.assertRaises(DiskFileNotExist, gdf.read_metadata)
+        self.assertTrue(gdf._disk_file_does_not_exist)
+        _m_rmd = Mock()
+        _m_do_unlink = Mock()
+        with patch("gluster.swift.obj.diskfile.read_metadata", _m_rmd):
+            with patch("gluster.swift.obj.diskfile.do_unlink", _m_do_unlink):
+                gdf.delete(0)
+        self.assertFalse(_m_rmd.called)
+        self.assertFalse(_m_do_unlink.called)
