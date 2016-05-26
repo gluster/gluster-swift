@@ -670,9 +670,13 @@ class TestUtils(unittest.TestCase):
 
     def test_get_account_details_notadir(self):
         tf = tempfile.NamedTemporaryFile()
-        container_list, container_count = utils.get_account_details(tf.name)
-        assert container_count == 0
-        assert container_list == []
+        try:
+            utils.get_account_details(tf.name)
+        except OSError as err:
+            if err.errno != errno.ENOTDIR:
+                self.fail("Expecting ENOTDIR")
+        else:
+            self.fail("Expecting ENOTDIR")
 
     def test_get_container_details_notadir(self):
         tf = tempfile.NamedTemporaryFile()

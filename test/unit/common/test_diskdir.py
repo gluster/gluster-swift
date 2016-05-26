@@ -279,7 +279,7 @@ class TestDiskCommon(unittest.TestCase):
         assert dc.logger == self.fake_logger
         assert dc.account == self.fake_accounts[0]
         assert dc.datadir == os.path.join(self.td, self.fake_drives[0])
-        assert dc._dir_exists is None
+        assert dc._dir_exists is False
 
     def test__dir_exists_read_metadata_exists(self):
         datadir = os.path.join(self.td, self.fake_drives[0])
@@ -315,6 +315,7 @@ class TestDiskCommon(unittest.TestCase):
     def test_is_deleted(self):
         dc = dd.DiskCommon(self.td, self.fake_drives[0],
                             self.fake_accounts[0], self.fake_logger)
+        dc._dir_exists_read_metadata()
         assert dc.is_deleted() == False
 
     def test_update_metadata(self):

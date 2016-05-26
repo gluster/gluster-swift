@@ -28,9 +28,9 @@ from gluster.swift.common.exceptions import GlusterFileSystemIOError
 from swift.common.exceptions import DiskFileNoSpace
 from swift.common.db import utf8encodekeys
 from gluster.swift.common.fs_utils import do_getctime, do_getmtime, do_stat, \
-    do_rmdir, do_log_rl, get_filename_from_fd, do_open, \
-    do_isdir, do_getsize, do_getxattr, do_setxattr, do_removexattr, do_read, \
-    do_close, do_dup, do_lseek, do_fstat, do_fsync, do_rename
+    do_rmdir, do_log_rl, get_filename_from_fd, do_open, do_getsize, \
+    do_getxattr, do_setxattr, do_removexattr, do_read, do_close, do_dup, \
+    do_lseek, do_fstat, do_fsync, do_rename
 from gluster.swift.common import Glusterfs
 
 try:
@@ -371,13 +371,12 @@ def get_container_details(cont_path):
     object_count = 0
     obj_list = []
 
-    if do_isdir(cont_path):
-        for (path, dirs, files) in gf_walk(cont_path):
-            object_count, bytes_used = update_list(path, cont_path, dirs,
-                                                   files, object_count,
-                                                   bytes_used, obj_list)
+    for (path, dirs, files) in gf_walk(cont_path):
+        object_count, bytes_used = update_list(path, cont_path, dirs,
+                                               files, object_count,
+                                               bytes_used, obj_list)
 
-            sleep()
+        sleep()
 
     return obj_list, object_count, bytes_used
 
@@ -445,11 +444,10 @@ def get_account_details(acc_path):
     """
     container_list = []
 
-    if os.path.isdir(acc_path):
-        for entry in gf_listdir(acc_path):
-            if entry.is_dir() and \
-                    entry.name not in (TEMP_DIR, ASYNCDIR, TRASHCAN):
-                container_list.append(entry.name)
+    for entry in gf_listdir(acc_path):
+        if entry.is_dir() and \
+                entry.name not in (TEMP_DIR, ASYNCDIR, TRASHCAN):
+            container_list.append(entry.name)
 
     return container_list, len(container_list)
 

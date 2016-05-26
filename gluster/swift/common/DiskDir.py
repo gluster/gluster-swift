@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import stat
 import errno
 
 from gluster.swift.common.fs_utils import dir_empty, mkdirs, do_chown, \
@@ -177,7 +178,7 @@ class DiskCommon(object):
         self.logger = logger
         self.account = account
         self.datadir = os.path.join(root, drive)
-        self._dir_exists = None
+        self._dir_exists = False
 
         # nthread=0 is intentional. This ensures that no green pool is
         # used. Call to force_run_in_thread() will ensure that the method
@@ -186,7 +187,7 @@ class DiskCommon(object):
         self.threadpool = ThreadPool(nthreads=0)
 
     def _dir_exists_read_metadata(self):
-        self._dir_exists = do_exists(self.datadir)
+        self._dir_exists = os.path.isdir(self.datadir)
         if self._dir_exists:
             try:
                 self.metadata = _read_metadata(self.datadir)
@@ -199,7 +200,7 @@ class DiskCommon(object):
     def is_deleted(self):
         # The intention of this method is to check the file system to see if
         # the directory actually exists.
-        return not do_exists(self.datadir)
+        return not self._dir_exists
 
     def empty(self):
         # If it does not exist, then it is empty.  A value of True is
@@ -356,6 +357,8 @@ class DiskDir(DiskCommon):
             # object count and bytes used. Return immediately before metadata
             # validation and creation happens.
             info = do_stat(self.datadir)
+            if info and stat.S_ISDIR(info.st_mode):
+                self._dir_exists = True
             if not info:
                 # Container no longer exists.
                 return
@@ -526,7 +529,7 @@ class DiskDir(DiskCommon):
         return objects
 
     def get_info_is_deleted(self):
-        if not do_exists(self.datadir):
+        if not self._dir_exists:
             return {}, True
         info = self.get_info()
         return info, False
@@ -622,6 +625,7 @@ class DiskDir(DiskCommon):
         # where created by the code, but not by the
         # caller as objects
         rmobjdir(self.datadir)
+        self._dir_exists = False
 
     def set_x_container_sync_points(self, sync_point1, sync_point2):
         self.metadata['x_container_sync_point1'] = sync_point1
@@ -679,6 +683,8 @@ class DiskAccount(DiskCommon):
             # used. Return immediately before metadata validation and
             # creation happens.
             info = do_stat(self.datadir)
+            if info and stat.S_ISDIR(info.st_mode):
+                self._dir_exists = True
             semi_fake_md = {
                 'X-Object-Count': (0, 0),
                 'X-Container-Count': (0, 0),
