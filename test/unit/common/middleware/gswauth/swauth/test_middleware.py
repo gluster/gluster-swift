@@ -17,6 +17,7 @@ try:
     import simplejson as json
 except ImportError:
     import json
+import hashlib
 import unittest
 from contextlib import contextmanager
 import mock
@@ -4856,6 +4857,30 @@ class TestAuth(unittest.TestCase):
         token = 'UFVUCgoKRnJpLCAyNiBGZWIgMjAxNiAwNjo0NT'\
                 'ozNCArMDAwMAovY29udGFpbmVyMw=='
         self.assertEqual(self.test_auth.get_groups(env, token), None)
+
+    def test_s3_only_hash_passed_to_hmac(self):
+        key = 'dadada'
+        salt = 'zuck'
+        key_hash = hashlib.sha1('%s%s' % (salt, key)).hexdigest()
+        auth_stored = "sha1:%s$%s" % (salt, key_hash)
+        self.test_auth.app = FakeApp(iter([
+            ('200 Ok', {},
+             json.dumps({"auth": auth_stored,
+                         "groups": [{'name': "act:usr"}, {'name': "act"},
+                                    {'name': ".admin"}]})),
+            ('204 Ok', {'X-Container-Meta-Account-Id': 'AUTH_act'}, '')]))
+        env = \
+            {'HTTP_AUTHORIZATION': 'AWS act:user:whatever',
+             'PATH_INFO': '/v1/AUTH_act/c1'}
+        token = 'UFVUCgoKRnJpLCAyNiBGZWIgMjAxNiAwNjo0NT'\
+                'ozNCArMDAwMAovY29udGFpbmVyMw=='
+        mock_hmac_new = mock.MagicMock()
+        with mock.patch('hmac.new', mock_hmac_new):
+            self.test_auth.get_groups(env, token)
+        self.assertTrue(mock_hmac_new.called)
+        # Assert that string passed to hmac.new is only the hash
+        self.assertEqual(mock_hmac_new.call_args[0][0], key_hash)
+
 
 
 if __name__ == '__main__':
