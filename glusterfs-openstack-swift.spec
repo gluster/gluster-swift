@@ -13,8 +13,8 @@ Name     : %{_name}
 Version  : %{_version}
 Release  : %{_release}%{?dist}
 Group    : Application/File
-URL      : http://launchpad.net/gluster-swift
-Vendor   : Fedora Project
+URL      : http://github.com/gluster/gluster-swift
+Vendor   : Gluster Community
 Source0  : %{_name}-%{_version}-%{_release}.tar.gz
 License  : ASL 2.0
 BuildArch: noarch
@@ -29,7 +29,10 @@ Requires : openstack-swift-account = 2.3.0
 Requires : openstack-swift-container = 2.3.0
 Requires : openstack-swift-object = 2.3.0
 Requires : openstack-swift-proxy = 2.3.0
-Requires : glusterfs-api >= 3.4.1
+# gluster-swift has no hard-dependency on particular version of glusterfs
+# so don't bump this up unless you want to force users to upgrade their
+# glusterfs deployment.
+Requires : python-gluster >= 3.8.0
 Obsoletes: glusterfs-swift-plugin
 Obsoletes: glusterfs-swift
 Obsoletes: glusterfs-ufo
@@ -39,10 +42,10 @@ Obsoletes: glusterfs-swift-proxy
 Obsoletes: glusterfs-swift-account
 
 %description
-SwiftOnFile integrates GlusterFS as an alternative back end for OpenStack 
+Gluster-Swift integrates GlusterFS as an alternative back end for OpenStack
 Object Storage (Swift) leveraging the existing front end OpenStack Swift code.
 Gluster volumes are used to store objects in files, containers are maintained
-as top-level directories of volumes, where accounts are mapped one-to-one to 
+as top-level directories of volumes, where accounts are mapped one-to-one to
 gluster volumes.
 
 %prep
@@ -68,13 +71,13 @@ done
 # Remove tests
 %{__rm} -rf %{buildroot}/%{python_sitelib}/test
 
-# Remove files provided by glusterfs-api
+# Remove files provided by python-gluster (glusterfs-api earlier)
 %{__rm} -rf %{buildroot}/%{python_sitelib}/gluster/__init__.p*
 
 %files
 %defattr(-,root,root)
 %{python_sitelib}/gluster
-%{python_sitelib}/gluster_swift-%{_version}_*.egg-info
+%{python_sitelib}/gluster_swift-%{_version}*.egg-info
 %{_bindir}/gluster-swift-gen-builders
 %{_bindir}/gluster-swift-print-metadata
 %{_bindir}/gluster-swift-migrate-metadata
@@ -99,7 +102,7 @@ done
 %config(noreplace) %{_confdir}/object-expirer.conf-gluster
 
 %changelog
-* Tue Mar 15 2015 Prashanth Pai <ppai@redhat.com> - 2.3.0-0
+* Tue Mar 15 2016 Prashanth Pai <ppai@redhat.com> - 2.3.0-0
 - Rebase to swift kilo (2.3.0)
 
 * Fri May 23 2014 Thiago da Silva <thiago@redhat.com> - 1.13.1-1
