@@ -19,7 +19,8 @@ import os
 
 from swift.common.swob import HTTPConflict, HTTPNotImplemented
 from swift.common.utils import public, timing_stats, replication, mkdirs
-from swift.common.request_helpers import split_and_validate_path
+from swift.common.request_helpers import split_and_validate_path, \
+    get_name_and_placement
 from swift.obj import server
 
 from gluster.swift.obj.diskfile import DiskFileManager
@@ -135,6 +136,14 @@ class ObjectController(server.ObjectController):
     @timing_stats()
     def PUT(self, request):
         try:
+            # hack for supporting multi-part. create dir during initialization
+            content_length = int(request.headers.get('Content-Length', -1))
+            authorization = request.headers.get('Authorization', '')
+            if content_length == 0 and 'AWS' in authorization:
+                device, partition, account, container, obj, policy = \
+                    get_name_and_placement(request, 5, 5, True)
+                if container.endswith("+segments"):
+                    request.headers["Content-Type"] = 'application/directory'
             # now call swift's PUT method
             return server.ObjectController.PUT(self, request)
         except (AlreadyExistsAsFile, AlreadyExistsAsDir):
