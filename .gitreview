@@ -2,5 +2,5 @@
 host=review.gluster.org
 port=29418
 project=gluster-swift.git
-defaultbranch=master
+defaultbranch=kilo
 defaultremote=gerrit
