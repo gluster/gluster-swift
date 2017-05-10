@@ -16,16 +16,26 @@
 # limitations under the License.
 
 import json
-import unittest
-from nose import SkipTest
+import unittest2
+from unittest2 import SkipTest
 from uuid import uuid4
 
-from test.functional import check_response, retry, requires_acls, \
-    load_constraint, requires_policies
+from test.functional import check_response, cluster_info, retry, \
+    requires_acls, load_constraint, requires_policies
 import test.functional as tf
 
+from six.moves import range
 
-class TestContainer(unittest.TestCase):
+
+def setUpModule():
+    tf.setup_package()
+
+
+def tearDownModule():
+    tf.teardown_package()
+
+
+class TestContainer(unittest2.TestCase):
 
     def setUp(self):
         if tf.skip:
@@ -70,7 +80,7 @@ class TestContainer(unittest.TestCase):
                 body = resp.read()
                 if resp.status == 404:
                     break
-                self.assert_(resp.status // 100 == 2, resp.status)
+                self.assertEqual(resp.status // 100, 2, resp.status)
                 objs = json.loads(body)
                 if not objs:
                     break
@@ -91,7 +101,7 @@ class TestContainer(unittest.TestCase):
         # container may have not been created
         resp = retry(delete, self.container)
         resp.read()
-        self.assert_(resp.status in (204, 404))
+        self.assertIn(resp.status, (204, 404))
 
     def test_multi_metadata(self):
         if tf.skip:
@@ -112,14 +122,14 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(head)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-one'), '1')
         resp = retry(post, 'X-Container-Meta-Two', '2')
         resp.read()
         self.assertEqual(resp.status, 204)
         resp = retry(head)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-one'), '1')
         self.assertEqual(resp.getheader('x-container-meta-two'), '2')
 
@@ -145,14 +155,14 @@ class TestContainer(unittest.TestCase):
             self.assertEqual(resp.status, 204)
             resp = retry(head)
             resp.read()
-            self.assert_(resp.status in (200, 204), resp.status)
+            self.assertIn(resp.status, (200, 204))
             self.assertEqual(resp.getheader(uni_key.encode('utf-8')), '1')
         resp = retry(post, 'X-Container-Meta-uni', uni_value)
         resp.read()
         self.assertEqual(resp.status, 204)
         resp = retry(head)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('X-Container-Meta-uni'),
                          uni_value.encode('utf-8'))
         if (tf.web_front_end == 'integral'):
@@ -161,7 +171,7 @@ class TestContainer(unittest.TestCase):
             self.assertEqual(resp.status, 204)
             resp = retry(head)
             resp.read()
-            self.assert_(resp.status in (200, 204), resp.status)
+            self.assertIn(resp.status, (200, 204))
             self.assertEqual(resp.getheader(uni_key.encode('utf-8')),
                              uni_value.encode('utf-8'))
 
@@ -196,11 +206,11 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 201)
         resp = retry(head, name)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-test'), 'Value')
         resp = retry(get, name)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-test'), 'Value')
         resp = retry(delete, name)
         resp.read()
@@ -212,12 +222,12 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 201)
         resp = retry(head, name)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
-        self.assertEqual(resp.getheader('x-container-meta-test'), None)
+        self.assertIn(resp.status, (200, 204))
+        self.assertIsNone(resp.getheader('x-container-meta-test'))
         resp = retry(get, name)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
-        self.assertEqual(resp.getheader('x-container-meta-test'), None)
+        self.assertIn(resp.status, (200, 204))
+        self.assertIsNone(resp.getheader('x-container-meta-test'))
         resp = retry(delete, name)
         resp.read()
         self.assertEqual(resp.status, 204)
@@ -244,22 +254,22 @@ class TestContainer(unittest.TestCase):
 
         resp = retry(head)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
-        self.assertEqual(resp.getheader('x-container-meta-test'), None)
+        self.assertIn(resp.status, (200, 204))
+        self.assertIsNone(resp.getheader('x-container-meta-test'))
         resp = retry(get)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
-        self.assertEqual(resp.getheader('x-container-meta-test'), None)
+        self.assertIn(resp.status, (200, 204))
+        self.assertIsNone(resp.getheader('x-container-meta-test'))
         resp = retry(post, 'Value')
         resp.read()
         self.assertEqual(resp.status, 204)
         resp = retry(head)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-test'), 'Value')
         resp = retry(get)
         resp.read()
-        self.assert_(resp.status in (200, 204), resp.status)
+        self.assertIn(resp.status, (200, 204))
         self.assertEqual(resp.getheader('x-container-meta-test'), 'Value')
 
     def test_PUT_bad_metadata(self):
@@ -319,7 +329,7 @@ class TestContainer(unittest.TestCase):
 
         name = uuid4().hex
         headers = {}
-        for x in xrange(self.max_meta_count):
+        for x in range(self.max_meta_count):
             headers['X-Container-Meta-%d' % x] = 'v'
         resp = retry(put, name, headers)
         resp.read()
@@ -329,7 +339,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         name = uuid4().hex
         headers = {}
-        for x in xrange(self.max_meta_count + 1):
+        for x in range(self.max_meta_count + 1):
             headers['X-Container-Meta-%d' % x] = 'v'
         resp = retry(put, name, headers)
         resp.read()
@@ -412,13 +422,13 @@ class TestContainer(unittest.TestCase):
             return check_response(conn)
 
         headers = {}
-        for x in xrange(self.max_meta_count):
+        for x in range(self.max_meta_count):
             headers['X-Container-Meta-%d' % x] = 'v'
         resp = retry(post, headers)
         resp.read()
         self.assertEqual(resp.status, 204)
         headers = {}
-        for x in xrange(self.max_meta_count + 1):
+        for x in range(self.max_meta_count + 1):
             headers['X-Container-Meta-%d' % x] = 'v'
         resp = retry(post, headers)
         resp.read()
@@ -449,8 +459,23 @@ class TestContainer(unittest.TestCase):
         resp = retry(post, headers)
         resp.read()
         self.assertEqual(resp.status, 204)
+        # this POST includes metadata size that is over limit
         headers['X-Container-Meta-k'] = \
-            'v' * (self.max_meta_overall_size - size)
+            'x' * (self.max_meta_overall_size - size)
+        resp = retry(post, headers)
+        resp.read()
+        self.assertEqual(resp.status, 400)
+        # this POST would be ok and the aggregate backend metadata
+        # size is on the border
+        headers = {'X-Container-Meta-k':
+                   'y' * (self.max_meta_overall_size - size - 1)}
+        resp = retry(post, headers)
+        resp.read()
+        self.assertEqual(resp.status, 204)
+        # this last POST would be ok by itself but takes the aggregate
+        # backend metadata size over limit
+        headers = {'X-Container-Meta-k':
+                   'z' * (self.max_meta_overall_size - size)}
         resp = retry(post, headers)
         resp.read()
         self.assertEqual(resp.status, 400)
@@ -467,7 +492,7 @@ class TestContainer(unittest.TestCase):
             resp = retry(get)
             raise Exception('Should not have been able to GET')
         except Exception as err:
-            self.assert_(str(err).startswith('No result after '), err)
+            self.assertTrue(str(err).startswith('No result after '), err)
 
         def post(url, token, parsed, conn):
             conn.request('POST', parsed.path + '/' + self.name, '',
@@ -494,7 +519,7 @@ class TestContainer(unittest.TestCase):
             resp = retry(get)
             raise Exception('Should not have been able to GET')
         except Exception as err:
-            self.assert_(str(err).startswith('No result after '), err)
+            self.assertTrue(str(err).startswith('No result after '), err)
 
     def test_cross_account_container(self):
         if tf.skip or tf.skip2:
@@ -707,12 +732,13 @@ class TestContainer(unittest.TestCase):
         def put(url, token, parsed, conn, name):
             conn.request('PUT', parsed.path + '/%s' % name, '',
                          {'X-Auth-Token': token})
+	    print("PUT X-Auth-Token:%s"%(token))
             return check_response(conn)
 
         # cannot list containers
         resp = retry(get, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant read-only access
         acl_user = tf.swift_test_user[2]
@@ -725,23 +751,23 @@ class TestContainer(unittest.TestCase):
         # read-only can list containers
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(self.name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(self.name, listing)
 
         # read-only can not create containers
         new_container_name = str(uuid4())
         resp = retry(put, new_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # but it can see newly created ones
         resp = retry(put, new_container_name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 201)
+        self.assertEqual(resp.status, 201)
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(new_container_name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(new_container_name, listing)
 
     @requires_acls
     def test_read_only_acl_metadata(self):
@@ -771,13 +797,13 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
         # cannot see metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant read-only access
         acl_user = tf.swift_test_user[2]
@@ -797,7 +823,7 @@ class TestContainer(unittest.TestCase):
         # read-only can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
     @requires_acls
@@ -827,7 +853,7 @@ class TestContainer(unittest.TestCase):
         # cannot list containers
         resp = retry(get, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant read-write access
         acl_user = tf.swift_test_user[2]
@@ -840,36 +866,36 @@ class TestContainer(unittest.TestCase):
         # can list containers
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(self.name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(self.name, listing)
 
         # can create new containers
         new_container_name = str(uuid4())
         resp = retry(put, new_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 201)
+        self.assertEqual(resp.status, 201)
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(new_container_name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(new_container_name, listing)
 
         # can also delete them
         resp = retry(delete, new_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(new_container_name not in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertNotIn(new_container_name, listing)
 
         # even if they didn't create them
         empty_container_name = str(uuid4())
         resp = retry(put, empty_container_name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 201)
+        self.assertEqual(resp.status, 201)
         resp = retry(delete, empty_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
 
     @requires_acls
     def test_read_write_acl_metadata(self):
@@ -899,13 +925,13 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
         # cannot see metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant read-write access
         acl_user = tf.swift_test_user[2]
@@ -918,7 +944,7 @@ class TestContainer(unittest.TestCase):
         # read-write can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
         # read-write can also write container metadata
@@ -926,21 +952,21 @@ class TestContainer(unittest.TestCase):
         headers = {'x-container-meta-test': new_value}
         resp = retry(post, self.name, headers=headers, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
 
         # and remove it
         headers = {'x-remove-container-meta-test': 'true'}
         resp = retry(post, self.name, headers=headers, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
-        self.assertEqual(resp.getheader('X-Container-Meta-Test'), None)
+        self.assertEqual(resp.status, 204)
+        self.assertIsNone(resp.getheader('X-Container-Meta-Test'))
 
     @requires_acls
     def test_admin_acl_listing(self):
@@ -969,7 +995,7 @@ class TestContainer(unittest.TestCase):
         # cannot list containers
         resp = retry(get, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant admin access
         acl_user = tf.swift_test_user[2]
@@ -982,36 +1008,36 @@ class TestContainer(unittest.TestCase):
         # can list containers
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(self.name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(self.name, listing)
 
         # can create new containers
         new_container_name = str(uuid4())
         resp = retry(put, new_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 201)
+        self.assertEqual(resp.status, 201)
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(new_container_name in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertIn(new_container_name, listing)
 
         # can also delete them
         resp = retry(delete, new_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, use_account=3)
         listing = resp.read()
-        self.assertEquals(resp.status, 200)
-        self.assert_(new_container_name not in listing)
+        self.assertEqual(resp.status, 200)
+        self.assertNotIn(new_container_name, listing)
 
         # even if they didn't create them
         empty_container_name = str(uuid4())
         resp = retry(put, empty_container_name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 201)
+        self.assertEqual(resp.status, 201)
         resp = retry(delete, empty_container_name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
 
     @requires_acls
     def test_admin_acl_metadata(self):
@@ -1041,13 +1067,13 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
         # cannot see metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 403)
+        self.assertEqual(resp.status, 403)
 
         # grant access
         acl_user = tf.swift_test_user[2]
@@ -1060,7 +1086,7 @@ class TestContainer(unittest.TestCase):
         # can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
         # can also write container metadata
@@ -1068,21 +1094,21 @@ class TestContainer(unittest.TestCase):
         headers = {'x-container-meta-test': new_value}
         resp = retry(post, self.name, headers=headers, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
 
         # and remove it
         headers = {'x-remove-container-meta-test': 'true'}
         resp = retry(post, self.name, headers=headers, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
-        self.assertEqual(resp.getheader('X-Container-Meta-Test'), None)
+        self.assertEqual(resp.status, 204)
+        self.assertIsNone(resp.getheader('X-Container-Meta-Test'))
 
     @requires_acls
     def test_protected_container_sync(self):
@@ -1115,7 +1141,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Sync-Key'), 'secret')
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
 
@@ -1130,10 +1156,10 @@ class TestContainer(unittest.TestCase):
         # can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
         # but not sync-key
-        self.assertEqual(resp.getheader('X-Container-Sync-Key'), None)
+        self.assertIsNone(resp.getheader('X-Container-Sync-Key'))
 
         # and can not write
         headers = {'x-container-sync-key': str(uuid4())}
@@ -1152,15 +1178,15 @@ class TestContainer(unittest.TestCase):
         # can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
         # but not sync-key
-        self.assertEqual(resp.getheader('X-Container-Sync-Key'), None)
+        self.assertIsNone(resp.getheader('X-Container-Sync-Key'))
 
         # sanity check sync-key w/ account1
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Sync-Key'), 'secret')
 
         # and can write
@@ -1174,7 +1200,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)  # validate w/ account1
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
         # but can not write sync-key
         self.assertEqual(resp.getheader('X-Container-Sync-Key'), 'secret')
@@ -1190,7 +1216,7 @@ class TestContainer(unittest.TestCase):
         # admin can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
         # and ALSO sync-key
         self.assertEqual(resp.getheader('X-Container-Sync-Key'), 'secret')
@@ -1203,7 +1229,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Sync-Key'), new_secret)
 
     @requires_acls
@@ -1238,7 +1264,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Read'), 'jdoe')
         self.assertEqual(resp.getheader('X-Container-Write'), 'jdoe')
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
@@ -1254,11 +1280,11 @@ class TestContainer(unittest.TestCase):
         # can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
         # but not container acl
-        self.assertEqual(resp.getheader('X-Container-Read'), None)
-        self.assertEqual(resp.getheader('X-Container-Write'), None)
+        self.assertIsNone(resp.getheader('X-Container-Read'))
+        self.assertIsNone(resp.getheader('X-Container-Write'))
 
         # and can not write
         headers = {
@@ -1280,16 +1306,16 @@ class TestContainer(unittest.TestCase):
         # can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), value)
         # but not container acl
-        self.assertEqual(resp.getheader('X-Container-Read'), None)
-        self.assertEqual(resp.getheader('X-Container-Write'), None)
+        self.assertIsNone(resp.getheader('X-Container-Read'))
+        self.assertIsNone(resp.getheader('X-Container-Write'))
 
         # sanity check container acls with account1
         resp = retry(get, self.name, use_account=1)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Read'), 'jdoe')
         self.assertEqual(resp.getheader('X-Container-Write'), 'jdoe')
 
@@ -1305,7 +1331,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=1)  # validate w/ account1
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
         # but can not write container acls
         self.assertEqual(resp.getheader('X-Container-Read'), 'jdoe')
@@ -1322,7 +1348,7 @@ class TestContainer(unittest.TestCase):
         # admin can read container metadata
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Meta-Test'), new_value)
         # and ALSO container acls
         self.assertEqual(resp.getheader('X-Container-Read'), 'jdoe')
@@ -1338,7 +1364,7 @@ class TestContainer(unittest.TestCase):
         self.assertEqual(resp.status, 204)
         resp = retry(get, self.name, use_account=3)
         resp.read()
-        self.assertEquals(resp.status, 204)
+        self.assertEqual(resp.status, 204)
         self.assertEqual(resp.getheader('X-Container-Read'), '.r:*')
 
     def test_long_name_content_type(self):
@@ -1381,8 +1407,11 @@ class TestContainer(unittest.TestCase):
             raise SkipTest()
 
         def put(url, token, parsed, conn):
+            # using the empty storage policy header value here to ensure
+            # that the default policy is chosen in case policy_specified is set
+            # see __init__.py for details on policy_specified
             conn.request('PUT', parsed.path + '/' + self.container, '',
-                         {'X-Auth-Token': token})
+                         {'X-Auth-Token': token, 'X-Storage-Policy': ''})
             return check_response(conn)
         resp = retry(put)
         resp.read()
@@ -1395,8 +1424,8 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'),
-                          default_policy['name'])
+        self.assertEqual(headers.get('x-storage-policy'),
+                         default_policy['name'])
 
     def test_error_invalid_storage_policy_name(self):
         def put(url, token, parsed, conn, headers):
@@ -1433,8 +1462,8 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'),
-                          policy['name'])
+        self.assertEqual(headers.get('x-storage-policy'),
+                         policy['name'])
 
         # and test recreate with-out specifying Storage Policy
         resp = retry(put)
@@ -1444,8 +1473,8 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'),
-                          policy['name'])
+        self.assertEqual(headers.get('x-storage-policy'),
+                         policy['name'])
 
         # delete it
         def delete(url, token, parsed, conn):
@@ -1460,7 +1489,7 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'), None)
+        self.assertIsNone(headers.get('x-storage-policy'))
 
     @requires_policies
     def test_conflict_change_storage_policy_with_put(self):
@@ -1490,8 +1519,8 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'),
-                          policy['name'])
+        self.assertEqual(headers.get('x-storage-policy'),
+                         policy['name'])
 
     @requires_policies
     def test_noop_change_storage_policy_with_post(self):
@@ -1527,11 +1556,61 @@ class TestContainer(unittest.TestCase):
         resp = retry(head)
         resp.read()
         headers = dict((k.lower(), v) for k, v in resp.getheaders())
-        self.assertEquals(headers.get('x-storage-policy'),
-                          policy['name'])
+        self.assertEqual(headers.get('x-storage-policy'),
+                         policy['name'])
+
+    def test_container_quota_bytes(self):
+        if 'container_quotas' not in cluster_info:
+            raise SkipTest('Container quotas not enabled')
+
+        def post(url, token, parsed, conn, name, value):
+            conn.request('POST', parsed.path + '/' + self.name, '',
+                         {'X-Auth-Token': token, name: value})
+            return check_response(conn)
+
+        def head(url, token, parsed, conn):
+            conn.request('HEAD', parsed.path + '/' + self.name, '',
+                         {'X-Auth-Token': token})
+            return check_response(conn)
+
+        # set X-Container-Meta-Quota-Bytes is 10
+        resp = retry(post, 'X-Container-Meta-Quota-Bytes', '10')
+        resp.read()
+        self.assertEqual(resp.status, 204)
+        resp = retry(head)
+        resp.read()
+        self.assertIn(resp.status, (200, 204))
+        # confirm X-Container-Meta-Quota-Bytes
+        self.assertEqual(resp.getheader('X-Container-Meta-Quota-Bytes'), '10')
+
+        def put(url, token, parsed, conn, data):
+            conn.request('PUT', parsed.path + '/' + self.name + '/object',
+                         data, {'X-Auth-Token': token})
+            return check_response(conn)
+
+        # upload 11 bytes object
+        resp = retry(put, '01234567890')
+        resp.read()
+        self.assertEqual(resp.status, 413)
+
+        # upload 10 bytes object
+        resp = retry(put, '0123456789')
+        resp.read()
+        self.assertEqual(resp.status, 201)
+
+        def get(url, token, parsed, conn):
+            conn.request('GET', parsed.path + '/' + self.name + '/object',
+                         '', {'X-Auth-Token': token})
+            return check_response(conn)
+
+        # download 10 bytes object
+        resp = retry(get)
+        body = resp.read()
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, '0123456789')
 
 
-class BaseTestContainerACLs(unittest.TestCase):
+class BaseTestContainerACLs(unittest2.TestCase):
     # subclasses can change the account in which container
     # is created/deleted by setUp/tearDown
     account = 1
@@ -1575,7 +1654,7 @@ class BaseTestContainerACLs(unittest.TestCase):
         while True:
             resp = retry(get, use_account=self.account)
             body = resp.read()
-            self.assert_(resp.status // 100 == 2, resp.status)
+            self.assertEqual(resp.status // 100, 2, resp.status)
             objs = json.loads(body)
             if not objs:
                 break
@@ -1706,4 +1785,4 @@ class TestContainerACLsAccount4(BaseTestContainerACLs):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest2.main()

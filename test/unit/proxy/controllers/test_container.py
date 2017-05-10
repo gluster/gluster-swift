@@ -24,22 +24,22 @@ from swift.proxy.controllers.base import headers_to_container_info
 from test.unit import fake_http_connect, FakeRing, FakeMemcache
 from swift.common.storage_policy import StoragePolicy
 from swift.common.request_helpers import get_sys_meta_prefix
-from swift.common import utils
 
 from test.unit import patch_policies, mocked_http_conn, debug_logger
+#from test.unit.common.ring.test_ring import TestRingBase
 from test.unit.proxy.test_server import node_error_count
 
 
 @patch_policies([StoragePolicy(0, 'zero', True, object_ring=FakeRing())])
 class TestContainerController(unittest.TestCase):
+
+    CONTAINER_REPLICAS = 3
+
     def setUp(self):
-        # SOF
-        self._orig_hash_suffix = utils.HASH_PATH_SUFFIX
-        self._orig_hash_prefix = utils.HASH_PATH_PREFIX
-        utils.HASH_PATH_SUFFIX = 'endcap'
-        utils.HASH_PATH_PREFIX = ''
+        TestRingBase.setUp(self)
         self.logger = debug_logger()
-        self.container_ring = FakeRing(max_more_nodes=9)
+        self.container_ring = FakeRing(replicas=self.CONTAINER_REPLICAS,
+                                       max_more_nodes=9)
         self.app = proxy_server.Application(None, FakeMemcache(),
                                             logger=self.logger,
                                             account_ring=FakeRing(),
@@ -58,7 +58,7 @@ class TestContainerController(unittest.TestCase):
                 proxy_server.ContainerController):
 
             def account_info(controller, *args, **kwargs):
-                patch_path = 'swift.proxy.controllers.base.get_info'
+                patch_path = 'swift.proxy.controllers.base.get_account_info'
                 with mock.patch(patch_path) as mock_get_info:
                     mock_get_info.return_value = dict(self.account_info)
                     return super(FakeAccountInfoContainerController,
@@ -72,16 +72,43 @@ class TestContainerController(unittest.TestCase):
                 return _orig_get_controller(*args, **kwargs)
         self.app.get_controller = wrapped_get_controller
 
-    def test_container_info_in_response_env(self):
+    def _make_callback_func(self, context):
+        def callback(ipaddr, port, device, partition, method, path,
+                     headers=None, query_string=None, ssl=False):
+            context['method'] = method
+            context['path'] = path
+            context['headers'] = headers or {}
+        return callback
+
+    def _assert_responses(self, method, test_cases):
+        controller = proxy_server.ContainerController(self.app, 'a', 'c')
+
+        for responses, expected in test_cases:
+            with mock.patch(
+                    'swift.proxy.controllers.base.http_connect',
+                    fake_http_connect(*responses)):
+                req = Request.blank('/v1/a/c')
+                resp = getattr(controller, method)(req)
+
+            self.assertEqual(expected,
+                             resp.status_int,
+                             'Expected %s but got %s. Failed case: %s' %
+                             (expected, resp.status_int, str(responses)))
+
+    def test_container_info_got_cached(self):
         controller = proxy_server.ContainerController(self.app, 'a', 'c')
         with mock.patch('swift.proxy.controllers.base.http_connect',
                         fake_http_connect(200, 200, body='')):
             req = Request.blank('/v1/a/c', {'PATH_INFO': '/v1/a/c'})
             resp = controller.HEAD(req)
         self.assertEqual(2, resp.status_int // 100)
-        self.assertTrue("swift.container/a/c" in resp.environ)
-        self.assertEqual(headers_to_container_info(resp.headers),
-                         resp.environ['swift.container/a/c'])
+        # Make sure it's in both swift.infocache and memcache
+        self.assertIn("container/a/c", resp.environ['swift.infocache'])
+        self.assertEqual(
+            headers_to_container_info(resp.headers),
+            resp.environ['swift.infocache']['container/a/c'])
+        from_memcache = self.app.memcache.get('container/a/c')
+        self.assertTrue(from_memcache)
 
     def test_swift_owner(self):
         owner_headers = {
@@ -93,25 +120,17 @@ class TestContainerController(unittest.TestCase):
         with mock.patch('swift.proxy.controllers.base.http_connect',
                         fake_http_connect(200, 200, headers=owner_headers)):
             resp = controller.HEAD(req)
-        self.assertEquals(2, resp.status_int // 100)
+        self.assertEqual(2, resp.status_int // 100)
         for key in owner_headers:
-            self.assertTrue(key not in resp.headers)
+            self.assertNotIn(key, resp.headers)
 
         req = Request.blank('/v1/a/c', environ={'swift_owner': True})
         with mock.patch('swift.proxy.controllers.base.http_connect',
                         fake_http_connect(200, 200, headers=owner_headers)):
             resp = controller.HEAD(req)
-        self.assertEquals(2, resp.status_int // 100)
+        self.assertEqual(2, resp.status_int // 100)
         for key in owner_headers:
-            self.assertTrue(key in resp.headers)
-
-    def _make_callback_func(self, context):
-        def callback(ipaddr, port, device, partition, method, path,
-                     headers=None, query_string=None, ssl=False):
-            context['method'] = method
-            context['path'] = path
-            context['headers'] = headers or {}
-        return callback
+            self.assertIn(key, resp.headers)
 
     def test_sys_meta_headers_PUT(self):
         # check that headers in sys meta namespace make it through
@@ -131,9 +150,9 @@ class TestContainerController(unittest.TestCase):
                         fake_http_connect(200, 200, give_connect=callback)):
             controller.PUT(req)
         self.assertEqual(context['method'], 'PUT')
-        self.assertTrue(sys_meta_key in context['headers'])
+        self.assertIn(sys_meta_key, context['headers'])
         self.assertEqual(context['headers'][sys_meta_key], 'foo')
-        self.assertTrue(user_meta_key in context['headers'])
+        self.assertIn(user_meta_key, context['headers'])
         self.assertEqual(context['headers'][user_meta_key], 'bar')
         self.assertNotEqual(context['headers']['x-timestamp'], '1.0')
 
@@ -154,9 +173,9 @@ class TestContainerController(unittest.TestCase):
                         fake_http_connect(200, 200, give_connect=callback)):
             controller.POST(req)
         self.assertEqual(context['method'], 'POST')
-        self.assertTrue(sys_meta_key in context['headers'])
+        self.assertIn(sys_meta_key, context['headers'])
         self.assertEqual(context['headers'][sys_meta_key], 'foo')
-        self.assertTrue(user_meta_key in context['headers'])
+        self.assertIn(user_meta_key, context['headers'])
         self.assertEqual(context['headers'][user_meta_key], 'bar')
         self.assertNotEqual(context['headers']['x-timestamp'], '1.0')
 
@@ -168,12 +187,11 @@ class TestContainerController(unittest.TestCase):
                 self.app._error_limiting = {}
                 req = Request.blank('/v1/a/c', method=method)
                 with mocked_http_conn(*statuses) as fake_conn:
-                    print 'a' * 50
                     resp = req.get_response(self.app)
                 self.assertEqual(resp.status_int, expected)
                 for req in fake_conn.requests:
                     self.assertEqual(req['method'], method)
-                    self.assert_(req['path'].endswith('/a/c'))
+                    self.assertTrue(req['path'].endswith('/a/c'))
 
             base_status = [201] * 3
             # test happy path
@@ -206,6 +224,118 @@ class TestContainerController(unittest.TestCase):
             self.assertEqual(node_error_count(
                 self.app, self.container_ring.devs[2]),
                 self.app.error_suppression_limit + 1)
+
+    def test_response_code_for_PUT(self):
+        PUT_TEST_CASES = [
+            ((201, 201, 201), 201),
+            ((201, 201, 404), 201),
+            ((201, 201, 503), 201),
+            ((201, 404, 404), 404),
+            ((201, 404, 503), 503),
+            ((201, 503, 503), 503),
+            ((404, 404, 404), 404),
+            ((404, 404, 503), 404),
+            ((404, 503, 503), 503),
+            ((503, 503, 503), 503)
+        ]
+        self._assert_responses('PUT', PUT_TEST_CASES)
+
+    def test_response_code_for_DELETE(self):
+        DELETE_TEST_CASES = [
+            ((204, 204, 204), 204),
+            ((204, 204, 404), 204),
+            ((204, 204, 503), 204),
+            ((204, 404, 404), 404),
+            ((204, 404, 503), 503),
+            ((204, 503, 503), 503),
+            ((404, 404, 404), 404),
+            ((404, 404, 503), 404),
+            ((404, 503, 503), 503),
+            ((503, 503, 503), 503)
+        ]
+        self._assert_responses('DELETE', DELETE_TEST_CASES)
+
+    def test_response_code_for_POST(self):
+        POST_TEST_CASES = [
+            ((204, 204, 204), 204),
+            ((204, 204, 404), 204),
+            ((204, 204, 503), 204),
+            ((204, 404, 404), 404),
+            ((204, 404, 503), 503),
+            ((204, 503, 503), 503),
+            ((404, 404, 404), 404),
+            ((404, 404, 503), 404),
+            ((404, 503, 503), 503),
+            ((503, 503, 503), 503)
+        ]
+        self._assert_responses('POST', POST_TEST_CASES)
+
+
+@patch_policies(
+    [StoragePolicy(0, 'zero', True, object_ring=FakeRing(replicas=4))])
+class TestContainerController4Replicas(TestContainerController):
+
+    CONTAINER_REPLICAS = 4
+
+    def test_response_code_for_PUT(self):
+        PUT_TEST_CASES = [
+            ((201, 201, 201, 201), 201),
+            ((201, 201, 201, 404), 201),
+            ((201, 201, 201, 503), 201),
+            ((201, 201, 404, 404), 201),
+            ((201, 201, 404, 503), 201),
+            ((201, 201, 503, 503), 201),
+            ((201, 404, 404, 404), 404),
+            ((201, 404, 404, 503), 404),
+            ((201, 404, 503, 503), 503),
+            ((201, 503, 503, 503), 503),
+            ((404, 404, 404, 404), 404),
+            ((404, 404, 404, 503), 404),
+            ((404, 404, 503, 503), 404),
+            ((404, 503, 503, 503), 503),
+            ((503, 503, 503, 503), 503)
+        ]
+        self._assert_responses('PUT', PUT_TEST_CASES)
+
+    def test_response_code_for_DELETE(self):
+        DELETE_TEST_CASES = [
+            ((204, 204, 204, 204), 204),
+            ((204, 204, 204, 404), 204),
+            ((204, 204, 204, 503), 204),
+            ((204, 204, 404, 404), 204),
+            ((204, 204, 404, 503), 204),
+            ((204, 204, 503, 503), 204),
+            ((204, 404, 404, 404), 404),
+            ((204, 404, 404, 503), 404),
+            ((204, 404, 503, 503), 503),
+            ((204, 503, 503, 503), 503),
+            ((404, 404, 404, 404), 404),
+            ((404, 404, 404, 503), 404),
+            ((404, 404, 503, 503), 404),
+            ((404, 503, 503, 503), 503),
+            ((503, 503, 503, 503), 503)
+        ]
+        self._assert_responses('DELETE', DELETE_TEST_CASES)
+
+    def test_response_code_for_POST(self):
+        POST_TEST_CASES = [
+            ((204, 204, 204, 204), 204),
+            ((204, 204, 204, 404), 204),
+            ((204, 204, 204, 503), 204),
+            ((204, 204, 404, 404), 204),
+            ((204, 204, 404, 503), 204),
+            ((204, 204, 503, 503), 204),
+            ((204, 404, 404, 404), 404),
+            ((204, 404, 404, 503), 404),
+            ((204, 404, 503, 503), 503),
+            ((204, 503, 503, 503), 503),
+            ((404, 404, 404, 404), 404),
+            ((404, 404, 404, 503), 404),
+            ((404, 404, 503, 503), 404),
+            ((404, 503, 503, 503), 503),
+            ((503, 503, 503, 503), 503)
+        ]
+        self._assert_responses('POST', POST_TEST_CASES)
 
 
 if __name__ == '__main__':

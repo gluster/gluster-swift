@@ -25,7 +25,7 @@ from gluster.swift.common.utils import delete_tracker_object
 from swift.obj.expirer import ObjectExpirer as SwiftObjectExpirer
 from swift.common.http import HTTP_NOT_FOUND
 from swift.common.internal_client import InternalClient, UnexpectedResponse
-from swift.common.utils import ThreadPool
+from gluster.swift.common.utils import ThreadPool
 
 EXCLUDE_DIRS = ('.trashcan', '.glusterfs')
 

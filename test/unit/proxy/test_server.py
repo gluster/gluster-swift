@@ -66,8 +66,7 @@ from swift.common.ring import RingData
 from swift.common.utils import mkdirs, normalize_timestamp, NullLogger
 from swift.common.wsgi import monkey_patch_mimetools, loadapp
 from swift.proxy.controllers import base as proxy_base
-from swift.proxy.controllers.base import get_container_memcache_key, \
-    get_account_memcache_key, cors_validation
+from swift.proxy.controllers.base import  get_cache_key,cors_validation
 import swift.proxy.controllers
 import swift.proxy.controllers.obj
 from swift.common.swob import Request, Response, HTTPUnauthorized, \
@@ -474,14 +473,14 @@ class TestController(unittest.TestCase):
                 self.controller.account_info(self.account)
             self.assertEquals(count, 123)
         with save_globals():
-            cache_key = get_account_memcache_key(self.account)
+            cache_key = get_cache_key(self.account)
             account_info = {'status': 200, 'container_count': 1234}
             self.memcache.set(cache_key, account_info)
             partition, nodes, count = \
                 self.controller.account_info(self.account)
             self.assertEquals(count, 1234)
         with save_globals():
-            cache_key = get_account_memcache_key(self.account)
+            cache_key = get_cache_key(self.account)
             account_info = {'status': 200, 'container_count': '1234'}
             self.memcache.set(cache_key, account_info)
             partition, nodes, count = \
@@ -509,7 +508,7 @@ class TestController(unittest.TestCase):
 
             # Test the internal representation in memcache
             # 'container_count' changed from int to str
-            cache_key = get_account_memcache_key(self.account)
+            cache_key = get_cache_key(self.account)
             container_info = {'status': 200,
                               'container_count': '12345',
                               'total_object_count': None,
@@ -536,7 +535,7 @@ class TestController(unittest.TestCase):
 
             # Test the internal representation in memcache
             # 'container_count' changed from 0 to None
-            cache_key = get_account_memcache_key(self.account)
+            cache_key = get_cache_key(self.account)
             account_info = {'status': 404,
                             'container_count': None,  # internally keep None
                             'total_object_count': None,
@@ -613,8 +612,7 @@ class TestController(unittest.TestCase):
                 self.account, self.container, self.request)
             self.check_container_info_return(ret)
 
-            cache_key = get_container_memcache_key(self.account,
-                                                   self.container)
+            cache_key = get_cache_key(self.account,self.container)
             cache_value = self.memcache.get(cache_key)
             self.assertTrue(isinstance(cache_value, dict))
             self.assertEquals(200, cache_value.get('status'))
@@ -636,8 +634,8 @@ class TestController(unittest.TestCase):
                 self.account, self.container, self.request)
             self.check_container_info_return(ret, True)
 
-            cache_key = get_container_memcache_key(self.account,
-                                                   self.container)
+            cache_key = get_cache_key(self.account,
+                                          self.container)
             cache_value = self.memcache.get(cache_key)
             self.assertTrue(isinstance(cache_value, dict))
             self.assertEquals(404, cache_value.get('status'))
@@ -652,7 +650,7 @@ class TestController(unittest.TestCase):
                 self.account, self.container, self.request)
             self.check_container_info_return(ret, True)
 
-            cache_key = get_container_memcache_key(self.account,
+            cache_key = get_cache_key(self.account,
                                                    self.container)
             cache_value = self.memcache.get(cache_key)
             self.assertTrue(isinstance(cache_value, dict))

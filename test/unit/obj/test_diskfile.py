@@ -31,7 +31,7 @@ from gluster.swift.common.exceptions import AlreadyExistsAsDir, \
     AlreadyExistsAsFile
 from swift.common.exceptions import DiskFileNoSpace, DiskFileNotOpen, \
     DiskFileNotExist, DiskFileExpired
-from swift.common.utils import ThreadPool
+from gluster.swift.common.utils import ThreadPool
 
 import gluster.swift.common.utils
 from gluster.swift.common.utils import normalize_timestamp

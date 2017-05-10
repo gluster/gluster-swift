@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from swift.common.exceptions import SwiftException
+
 
 class GlusterFileSystemOSError(OSError):
     pass
@@ -47,4 +49,8 @@ class AlreadyExistsAsFile(GlusterfsException):
 
 
 class DiskFileContainerDoesNotExist(GlusterfsException):
+    pass
+
+
+class ThreadPoolDead(SwiftException):
     pass

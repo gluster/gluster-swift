@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import httplib
+from __future__ import print_function
 import mock
 import os
+from six.moves.urllib.parse import urlparse
 import sys
 import pickle
 import socket
@@ -24,20 +25,23 @@ import eventlet
 import eventlet.debug
 import functools
 import random
-from ConfigParser import ConfigParser, NoSectionError
+
 from time import time, sleep
-from httplib import HTTPException
-from urlparse import urlparse
-from nose import SkipTest
 from contextlib import closing
 from gzip import GzipFile
 from shutil import rmtree
 from tempfile import mkdtemp
+from unittest2 import SkipTest
+
+from six.moves.configparser import ConfigParser, NoSectionError
+from six.moves import http_client
+from six.moves.http_client import HTTPException
+
 from swift.common.middleware.memcache import MemcacheMiddleware
 from swift.common.storage_policy import parse_storage_policies, PolicyError
 
 from test import get_config
-from test.functional.swift_test_client import Account, Connection, \
+from test.functional.swift_test_client import Account, Connection, Container, \
     ResponseError
 # This has the side effect of mocking out the xattr module so that unit tests
 # (and in this case, when in-process functional tests are called for) can run
@@ -47,13 +51,13 @@ from test.unit import debug_logger, FakeMemcache
 from swift.common import constraints, utils, ring, storage_policy
 from swift.common.ring import Ring
 from swift.common.wsgi import monkey_patch_mimetools, loadapp
-from swift.common.utils import config_true_value
+from swift.common.utils import config_true_value, split_path
 from swift.account import server as account_server
 from swift.container import server as container_server
 from swift.obj import server as object_server, mem_server as mem_object_server
 import swift.proxy.controllers.obj
 
-httplib._MAXHEADERS = constraints.MAX_HEADER_COUNT
+http_client._MAXHEADERS = constraints.MAX_HEADER_COUNT
 DEBUG = True
 
 # In order to get the proper blocking behavior of sockets without using
@@ -88,15 +92,16 @@ normalized_urls = None
 # If no config was read, we will fall back to old school env vars
 swift_test_auth_version = None
 swift_test_auth = os.environ.get('SWIFT_TEST_AUTH')
-swift_test_user = [os.environ.get('SWIFT_TEST_USER'), None, None, '', '']
-swift_test_key = [os.environ.get('SWIFT_TEST_KEY'), None, None, '', '']
-swift_test_tenant = ['', '', '', '', '']
-swift_test_perm = ['', '', '', '', '']
-swift_test_domain = ['', '', '', '', '']
-swift_test_user_id = ['', '', '', '', '']
-swift_test_tenant_id = ['', '', '', '', '']
+swift_test_user = [os.environ.get('SWIFT_TEST_USER'), None, None, '', '', '']
+swift_test_key = [os.environ.get('SWIFT_TEST_KEY'), None, None, '', '', '']
+swift_test_tenant = ['', '', '', '', '', '']
+swift_test_perm = ['', '', '', '', '', '']
+swift_test_domain = ['', '', '', '', '', '']
+swift_test_user_id = ['', '', '', '', '', '']
+swift_test_tenant_id = ['', '', '', '', '', '']
 
-skip, skip2, skip3, skip_service_tokens = False, False, False, False
+skip, skip2, skip3, skip_service_tokens, skip_if_no_reseller_admin = \
+    False, False, False, False, False
 
 orig_collate = ''
 insecure = False
@@ -105,7 +110,8 @@ orig_hash_path_suff_pref = ('', '')
 orig_swift_conf_name = None
 
 in_process = False
-_testdir = _test_servers = _test_coros = None
+_testdir = _test_servers = _test_coros = _test_socks = None
+policy_specified = None
 
 
 class FakeMemcacheMiddleware(MemcacheMiddleware):
@@ -124,7 +130,7 @@ class InProcessException(BaseException):
 
 
 def _info(msg):
-    print >> sys.stderr, msg
+    print(msg, file=sys.stderr)
 
 
 def _debug(msg):
@@ -210,7 +216,6 @@ def _in_process_setup_ring(swift_conf, conf_src_dir, testdir):
     for policy in policies:
         conf.remove_section(sp_prefix + str(policy.idx))
 
-    policy_specified = os.environ.get('SWIFT_TEST_POLICY')
     if policy_specified:
         policy_to_test = policies.get_by_name(policy_specified)
         if policy_to_test is None:
@@ -282,10 +287,61 @@ def _in_process_setup_ring(swift_conf, conf_src_dir, testdir):
     return obj_sockets
 
 
+def _load_encryption(proxy_conf_file, **kwargs):
+    """
+    Load encryption configuration and override proxy-server.conf contents.
+
+    :param proxy_conf_file: Source proxy conf filename
+    :returns: Path to the test proxy conf file to use
+    :raises InProcessException: raised if proxy conf contents are invalid
+    """
+    _debug('Setting configuration for encryption')
+
+    # The global conf dict cannot be used to modify the pipeline.
+    # The pipeline loader requires the pipeline to be set in the local_conf.
+    # If pipeline is set in the global conf dict (which in turn populates the
+    # DEFAULTS options) then it prevents pipeline being loaded into the local
+    # conf during wsgi load_app.
+    # Therefore we must modify the [pipeline:main] section.
+
+    conf = ConfigParser()
+    conf.read(proxy_conf_file)
+    try:
+        section = 'pipeline:main'
+        pipeline = conf.get(section, 'pipeline')
+        pipeline = pipeline.replace(
+            "proxy-logging proxy-server",
+            "keymaster encryption proxy-logging proxy-server")
+        conf.set(section, 'pipeline', pipeline)
+        root_secret = os.urandom(32).encode("base64")
+        conf.set('filter:keymaster', 'encryption_root_secret', root_secret)
+    except NoSectionError as err:
+        msg = 'Error problem with proxy conf file %s: %s' % \
+              (proxy_conf_file, err)
+        raise InProcessException(msg)
+
+    test_conf_file = os.path.join(_testdir, 'proxy-server.conf')
+    with open(test_conf_file, 'w') as fp:
+        conf.write(fp)
+
+    return test_conf_file
+
+
+# Mapping from possible values of the variable
+# SWIFT_TEST_IN_PROCESS_CONF_LOADER
+# to the method to call for loading the associated configuration
+# The expected signature for these methods is:
+# conf_filename_to_use loader(input_conf_filename, **kwargs)
+conf_loaders = {
+    'encryption': _load_encryption
+}
+
+
 def in_process_setup(the_object_server=object_server):
     _info('IN-PROCESS SERVERS IN USE FOR FUNCTIONAL TESTS')
     _info('Using object_server class: %s' % the_object_server.__name__)
     conf_src_dir = os.environ.get('SWIFT_TEST_IN_PROCESS_CONF_DIR')
+    show_debug_logs = os.environ.get('SWIFT_TEST_DEBUG_LOGS')
 
     if conf_src_dir is not None:
         if not os.path.isdir(conf_src_dir):
@@ -312,6 +368,26 @@ def in_process_setup(the_object_server=object_server):
     utils.mkdirs(os.path.join(_testdir, 'sdb1'))
     utils.mkdirs(os.path.join(_testdir, 'sdb1', 'tmp'))
 
+    # Call the associated method for the value of
+    # 'SWIFT_TEST_IN_PROCESS_CONF_LOADER', if one exists
+    conf_loader_label = os.environ.get(
+        'SWIFT_TEST_IN_PROCESS_CONF_LOADER')
+    if conf_loader_label is not None:
+        try:
+            conf_loader = conf_loaders[conf_loader_label]
+            _debug('Calling method %s mapped to conf loader %s' %
+                   (conf_loader.__name__, conf_loader_label))
+        except KeyError as missing_key:
+            raise InProcessException('No function mapped for conf loader %s' %
+                                     missing_key)
+
+        try:
+            # Pass-in proxy_conf
+            proxy_conf = conf_loader(proxy_conf)
+            _debug('Now using proxy conf %s' % proxy_conf)
+        except Exception as err:  # noqa
+            raise InProcessException(err)
+
     swift_conf = _in_process_setup_swift_conf(swift_conf_src, _testdir)
     obj_sockets = _in_process_setup_ring(swift_conf, conf_src_dir, _testdir)
 
@@ -335,10 +411,13 @@ def in_process_setup(the_object_server=object_server):
     orig_hash_path_suff_pref = utils.HASH_PATH_PREFIX, utils.HASH_PATH_SUFFIX
     utils.validate_hash_conf()
 
+    global _test_socks
+    _test_socks = []
     # We create the proxy server listening socket to get its port number so
     # that we can add it as the "auth_port" value for the functional test
     # clients.
     prolis = eventlet.listen(('localhost', 0))
+    _test_socks.append(prolis)
 
     # The following set of configuration values is used both for the
     # functional test frame work and for the various proxy, account, container
@@ -377,13 +456,27 @@ def in_process_setup(the_object_server=object_server):
         'service_prefix': 'SERVICE',
         # For tempauth middleware. Update reseller_prefix
         'reseller_prefix': 'AUTH, SERVICE',
-        'SERVICE_require_group': 'service'
+        'SERVICE_require_group': 'service',
+        # Reseller admin user (needs reseller_admin_role)
+        'account6': 'test6',
+        'username6': 'tester6',
+        'password6': 'testing6'
     })
+
+    # If an env var explicitly specifies the proxy-server object_post_as_copy
+    # option then use its value, otherwise leave default config unchanged.
+    object_post_as_copy = os.environ.get(
+        'SWIFT_TEST_IN_PROCESS_OBJECT_POST_AS_COPY')
+    if object_post_as_copy is not None:
+        object_post_as_copy = config_true_value(object_post_as_copy)
+        config['object_post_as_copy'] = str(object_post_as_copy)
+        _debug('Setting object_post_as_copy to %r' % object_post_as_copy)
 
     acc1lis = eventlet.listen(('localhost', 0))
     acc2lis = eventlet.listen(('localhost', 0))
     con1lis = eventlet.listen(('localhost', 0))
     con2lis = eventlet.listen(('localhost', 0))
+    _test_socks += [acc1lis, acc2lis, con1lis, con2lis] + obj_sockets
 
     account_ring_path = os.path.join(_testdir, 'account.ring.gz')
     with closing(GzipFile(account_ring_path, 'wb')) as f:
@@ -412,23 +505,30 @@ def in_process_setup(the_object_server=object_server):
     # Default to only 4 seconds for in-process functional test runs
     eventlet.wsgi.WRITE_TIMEOUT = 4
 
+    def get_logger_name(name):
+        if show_debug_logs:
+            return debug_logger(name)
+        else:
+            return None
+
     acc1srv = account_server.AccountController(
-        config, logger=debug_logger('acct1'))
+        config, logger=get_logger_name('acct1'))
     acc2srv = account_server.AccountController(
-        config, logger=debug_logger('acct2'))
+        config, logger=get_logger_name('acct2'))
     con1srv = container_server.ContainerController(
-        config, logger=debug_logger('cont1'))
+        config, logger=get_logger_name('cont1'))
     con2srv = container_server.ContainerController(
-        config, logger=debug_logger('cont2'))
+        config, logger=get_logger_name('cont2'))
 
     objsrvs = [
         (obj_sockets[index],
          the_object_server.ObjectController(
-             config, logger=debug_logger('obj%d' % (index + 1))))
+             config, logger=get_logger_name('obj%d' % (index + 1))))
         for index in range(len(obj_sockets))
     ]
 
-    logger = debug_logger('proxy')
+    if show_debug_logs:
+        logger = debug_logger('proxy')
 
     def get_logger(name, *args, **kwargs):
         return logger
@@ -442,6 +542,8 @@ def in_process_setup(the_object_server=object_server):
                 raise InProcessException(e)
 
     nl = utils.NullLogger()
+    global proxy_srv
+    proxy_srv = prolis
     prospa = eventlet.spawn(eventlet.wsgi.server, prolis, app, nl)
     acc1spa = eventlet.spawn(eventlet.wsgi.server, acc1lis, acc1srv, nl)
     acc2spa = eventlet.spawn(eventlet.wsgi.server, acc2lis, acc2srv, nl)
@@ -483,6 +585,7 @@ def get_cluster_info():
     # We'll update those constraints based on what the /info API provides, if
     # anything.
     global cluster_info
+    global config
     try:
         conn = Connection(config)
         conn.authenticate()
@@ -498,7 +601,7 @@ def get_cluster_info():
             # Most likely the swift cluster has "expose_info = false" set
             # in its proxy-server.conf file, so we'll just do the best we
             # can.
-            print >>sys.stderr, "** Swift Cluster not exposing /info **"
+            print("** Swift Cluster not exposing /info **", file=sys.stderr)
 
     # Finally, we'll allow any constraint present in the swift-constraints
     # section of test.conf to override everything. Note that only those
@@ -510,8 +613,8 @@ def get_cluster_info():
         except KeyError:
             pass
         except ValueError:
-            print >>sys.stderr, "Invalid constraint value: %s = %s" % (
-                k, test_constraints[k])
+            print("Invalid constraint value: %s = %s" % (
+                k, test_constraints[k]), file=sys.stderr)
     eff_constraints.update(test_constraints)
 
     # Just make it look like these constraints were loaded from a /info call,
@@ -521,6 +624,9 @@ def get_cluster_info():
 
 
 def setup_package():
+
+    global policy_specified
+    policy_specified = os.environ.get('SWIFT_TEST_POLICY')
     in_process_env = os.environ.get('SWIFT_TEST_IN_PROCESS')
     if in_process_env is not None:
         use_in_process = utils.config_true_value(in_process_env)
@@ -529,6 +635,7 @@ def setup_package():
 
     global in_process
 
+    global config
     if use_in_process:
         # Explicitly set to True, so barrel on ahead with in-process
         # functional test setup.
@@ -540,10 +647,13 @@ def setup_package():
             # if the test.conf file is not found, or does not provide a usable
             # configuration.
             config.update(get_config('func_test'))
-            if config:
-                in_process = False
-            else:
+            if not config:
                 in_process = True
+            # else... leave in_process value unchanged. It may be that
+            # setup_package is called twice, in which case in_process_setup may
+            # have loaded config before we reach here a second time, so the
+            # existence of config is not reliable to determine that in_process
+            # should be False. Anyway, it's default value is False.
         else:
             # Explicitly set to False, do not attempt to use in-process
             # functional tests, be sure we attempt to read from local
@@ -558,8 +668,8 @@ def setup_package():
             in_process_setup(the_object_server=(
                 mem_object_server if in_mem_obj else object_server))
         except InProcessException as exc:
-            print >> sys.stderr, ('Exception during in-process setup: %s'
-                                  % str(exc))
+            print(('Exception during in-process setup: %s'
+                   % str(exc)), file=sys.stderr)
             raise
 
     global web_front_end
@@ -660,6 +770,10 @@ def setup_package():
                 swift_test_user[4] = config['username5']
                 swift_test_tenant[4] = config['account5']
                 swift_test_key[4] = config['password5']
+            if 'username6' in config:
+                swift_test_user[5] = config['username6']
+                swift_test_tenant[5] = config['account6']
+                swift_test_key[5] = config['password6']
 
             for _ in range(5):
                 swift_test_perm[_] = swift_test_tenant[_] + ':' \
@@ -668,20 +782,19 @@ def setup_package():
     global skip
     skip = not all([swift_test_auth, swift_test_user[0], swift_test_key[0]])
     if skip:
-        print >>sys.stderr, 'SKIPPING FUNCTIONAL TESTS DUE TO NO CONFIG'
+        print('SKIPPING FUNCTIONAL TESTS DUE TO NO CONFIG', file=sys.stderr)
 
     global skip2
     skip2 = not all([not skip, swift_test_user[1], swift_test_key[1]])
     if not skip and skip2:
-        print >>sys.stderr, \
-            'SKIPPING SECOND ACCOUNT FUNCTIONAL TESTS' \
-            ' DUE TO NO CONFIG FOR THEM'
+        print('SKIPPING SECOND ACCOUNT FUNCTIONAL TESTS '
+              'DUE TO NO CONFIG FOR THEM', file=sys.stderr)
 
     global skip3
     skip3 = not all([not skip, swift_test_user[2], swift_test_key[2]])
     if not skip and skip3:
-        print >>sys.stderr, \
-            'SKIPPING THIRD ACCOUNT FUNCTIONAL TESTS DUE TO NO CONFIG FOR THEM'
+        print('SKIPPING THIRD ACCOUNT FUNCTIONAL TESTS'
+              'DUE TO NO CONFIG FOR THEM', file=sys.stderr)
 
     global skip_if_not_v3
     skip_if_not_v3 = (swift_test_auth_version != '3'
@@ -689,16 +802,42 @@ def setup_package():
                                   swift_test_user[3],
                                   swift_test_key[3]]))
     if not skip and skip_if_not_v3:
-        print >>sys.stderr, \
-            'SKIPPING FUNCTIONAL TESTS SPECIFIC TO AUTH VERSION 3'
+        print('SKIPPING FUNCTIONAL TESTS SPECIFIC TO AUTH VERSION 3',
+              file=sys.stderr)
 
     global skip_service_tokens
     skip_service_tokens = not all([not skip, swift_test_user[4],
                                    swift_test_key[4], swift_test_tenant[4],
                                    swift_test_service_prefix])
     if not skip and skip_service_tokens:
-        print >>sys.stderr, \
-            'SKIPPING FUNCTIONAL TESTS SPECIFIC TO SERVICE TOKENS'
+        print(
+            'SKIPPING FUNCTIONAL TESTS SPECIFIC TO SERVICE TOKENS',
+            file=sys.stderr)
+
+    if policy_specified:
+        policies = FunctionalStoragePolicyCollection.from_info()
+        for p in policies:
+            # policy names are case-insensitive
+            if policy_specified.lower() == p['name'].lower():
+                _info('Using specified policy %s' % policy_specified)
+                FunctionalStoragePolicyCollection.policy_specified = p
+                Container.policy_specified = policy_specified
+                break
+        else:
+            _info(
+                'SKIPPING FUNCTIONAL TESTS: Failed to find specified policy %s'
+                % policy_specified)
+            raise Exception('Failed to find specified policy %s'
+                            % policy_specified)
+
+    global skip_if_no_reseller_admin
+    skip_if_no_reseller_admin = not all([not skip, swift_test_user[5],
+                                         swift_test_key[5],
+                                         swift_test_tenant[5]])
+    if not skip and skip_if_no_reseller_admin:
+        print(
+            'SKIPPING FUNCTIONAL TESTS DUE TO NO CONFIG FOR RESELLER ADMIN',
+            file=sys.stderr)
 
     get_cluster_info()
 
@@ -708,16 +847,23 @@ def teardown_package():
     locale.setlocale(locale.LC_COLLATE, orig_collate)
 
     # clean up containers and objects left behind after running tests
-    conn = Connection(config)
-    conn.authenticate()
-    account = Account(conn, config.get('account', config['username']))
-    account.delete_containers()
+    global config
+
+    if config:
+        conn = Connection(config)
+        conn.authenticate()
+        account = Account(conn, config.get('account', config['username']))
+        account.delete_containers()
 
     global in_process
+    global _test_socks
     if in_process:
         try:
-            for server in _test_coros:
+            for i, server in enumerate(_test_coros):
                 server.kill()
+                if not server.dead:
+                    # kill it from the socket level
+                    _test_socks[i].close()
         except Exception:
             pass
         try:
@@ -728,6 +874,7 @@ def teardown_package():
             orig_hash_path_suff_pref
         utils.SWIFT_CONF_FILE = orig_swift_conf_name
         constraints.reload_constraints()
+        reset_globals()
 
 
 class AuthError(Exception):
@@ -745,10 +892,37 @@ parsed = [None, None, None, None, None]
 conn = [None, None, None, None, None]
 
 
+def reset_globals():
+    global url, token, service_token, parsed, conn, config
+    url = [None, None, None, None, None]
+    token = [None, None, None, None, None]
+    service_token = [None, None, None, None, None]
+    parsed = [None, None, None, None, None]
+    conn = [None, None, None, None, None]
+    if config:
+        config = {}
+
+
 def connection(url):
     if has_insecure:
-        return http_connection(url, insecure=insecure)
-    return http_connection(url)
+        parsed_url, http_conn = http_connection(url, insecure=insecure)
+    else:
+        parsed_url, http_conn = http_connection(url)
+
+    orig_request = http_conn.request
+
+    # Add the policy header if policy_specified is set
+    def request_with_policy(method, url, body=None, headers={}):
+        version, account, container, obj = split_path(url, 1, 4, True)
+        if policy_specified and method == 'PUT' and container and not obj \
+                and 'X-Storage-Policy' not in headers:
+            headers['X-Storage-Policy'] = policy_specified
+
+        return orig_request(method, url, body, headers)
+
+    http_conn.request = request_with_policy
+
+    return parsed_url, http_conn
 
 
 def get_url_token(user_index, os_options):
@@ -899,6 +1073,9 @@ def requires_acls(f):
 
 class FunctionalStoragePolicyCollection(object):
 
+    # policy_specified is set in __init__.py when tests are being set up.
+    policy_specified = None
+
     def __init__(self, policies):
         self._all = policies
         self.default = None
@@ -940,7 +1117,12 @@ class FunctionalStoragePolicyCollection(object):
             p.get(k) != v for k, v in kwargs.items())])
 
     def select(self):
-        return random.choice(self)
+        # check that a policy was specified and that it is available
+        # in the current list (i.e., hasn't been excluded of the current list)
+        if self.policy_specified and self.policy_specified in self:
+            return self.policy_specified
+        else:
+            return random.choice(self)
 
 
 def requires_policies(f):

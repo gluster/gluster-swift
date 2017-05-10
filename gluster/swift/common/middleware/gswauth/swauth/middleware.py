@@ -379,7 +379,7 @@ class Swauth(object):
                 if memcache_client:
                     memcache_client.set(
                         memcache_key, (time() + expires_from_now, groups),
-                        timeout=expires_from_now)
+                        time=expires_from_now)
             else:
                 path = quote('/v1/%s/.token_%s/%s' %
                              (self.auth_account, token[-1], token))
@@ -401,7 +401,7 @@ class Swauth(object):
                     memcache_client.set(
                         memcache_key,
                         (detail['expires'], groups),
-                        timeout=float(detail['expires'] - time()))
+                        time=float(detail['expires'] - time()))
         return groups
 
     def authorize(self, req):
@@ -1448,7 +1448,7 @@ class Swauth(object):
                 (self.itoken_expires,
                  '%s,.reseller_admin,%s' % (self.metadata_volume,
                                             self.auth_account)),
-                timeout=self.token_life)
+                time=self.token_life)
         return self.itoken
 
     def get_admin_detail(self, req):

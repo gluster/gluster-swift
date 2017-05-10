@@ -102,3 +102,14 @@ _ring.Ring = ring.Ring
 import swift.account.utils
 from gluster.swift.account.utils import account_listing_response as gf_als
 swift.account.utils.account_listing_response = gf_als
+
+# Monkey patch StoragePolicy.load_ring as POLICIES are initialized already
+from swift.common.storage_policy import StoragePolicy
+
+
+def load_ring(self, swift_dir):
+    if self.object_ring:
+        return
+    self.object_ring = ring.Ring(swift_dir, ring_name='object')
+
+StoragePolicy.load_ring = load_ring

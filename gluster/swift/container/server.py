@@ -21,7 +21,7 @@ import gluster.swift.common.constraints    # noqa
 
 from swift.container import server
 from gluster.swift.common.DiskDir import DiskDir
-from swift.common.utils import public, timing_stats
+from swift.common.utils import public, timing_stats, config_true_value
 from swift.common.exceptions import DiskFileNoSpace
 from swift.common.swob import HTTPInsufficientStorage, HTTPNotFound, \
     HTTPPreconditionFailed
@@ -105,6 +105,8 @@ class ContainerController(server.ContainerController):
         end_marker = get_param(req, 'end_marker')
         limit = constraints.CONTAINER_LISTING_LIMIT
         given_limit = get_param(req, 'limit')
+        reverse = config_true_value(get_param(req, 'reverse'))
+
         if given_limit and given_limit.isdigit():
             limit = int(given_limit)
             if limit > constraints.CONTAINER_LISTING_LIMIT:
@@ -125,7 +127,7 @@ class ContainerController(server.ContainerController):
         container_list = broker.list_objects_iter(
             limit, marker, end_marker, prefix, delimiter, path,
             storage_policy_index=info['storage_policy_index'],
-            out_content_type=out_content_type)
+            out_content_type=out_content_type, reverse=reverse)
         return self.create_listing(req, out_content_type, info, resp_headers,
                                    broker.metadata, container_list, container)
 

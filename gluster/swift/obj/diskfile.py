@@ -16,6 +16,7 @@
 import os
 import stat
 import errno
+from collections import defaultdict
 try:
     from random import SystemRandom
     random = SystemRandom()
@@ -25,10 +26,11 @@ import logging
 import time
 from uuid import uuid4
 from eventlet import sleep
+from swift.common.utils import Timestamp
 from contextlib import contextmanager
 from gluster.swift.common.exceptions import AlreadyExistsAsFile, \
     AlreadyExistsAsDir, DiskFileContainerDoesNotExist
-from swift.common.utils import ThreadPool
+from gluster.swift.common.utils import ThreadPool
 from swift.common.exceptions import DiskFileNotExist, DiskFileError, \
     DiskFileNoSpace, DiskFileDeviceUnavailable, DiskFileNotOpen, \
     DiskFileExpired
@@ -212,9 +214,16 @@ class DiskFileManager(SwiftDiskFileManager):
     :param conf: caller provided configuration object
     :param logger: caller provided logger
     """
+    def __init__(self, conf, logger):
+        super(DiskFileManager, self).__init__(conf, logger)
+        threads_per_disk = int(conf.get('threads_per_disk', '0'))
+        self.threadpools = defaultdict(
+            lambda: ThreadPool(nthreads=threads_per_disk))
+
     def get_diskfile(self, device, partition, account, container, obj,
                      policy=None, **kwargs):
         dev_path = self.get_dev_path(device, self.mount_check)
+
         if not dev_path:
             raise DiskFileDeviceUnavailable()
         return DiskFile(self, dev_path, self.threadpools[device],
@@ -553,7 +562,7 @@ class DiskFile(object):
     """
     def __init__(self, mgr, dev_path, threadpool, partition,
                  account=None, container=None, obj=None,
-                 policy=None, uid=DEFAULT_UID, gid=DEFAULT_GID):
+                 policy=None, uid=DEFAULT_UID, gid=DEFAULT_GID, **kwargs):
         # Variables partition and policy is currently unused.
         self._mgr = mgr
         self._device_path = dev_path
@@ -587,6 +596,48 @@ class DiskFile(object):
 
         self._data_file = os.path.join(self._put_datadir, self._obj)
         self._disk_file_open = False
+
+    @property
+    def timestamp(self):
+        if self._metadata is None:
+            raise DiskFileNotOpen()
+        return Timestamp(self._metadata.get(X_TIMESTAMP))
+
+    @property
+    def data_timestamp(self):
+        return self.timestamp
+
+    @property
+    def durable_timestamp(self):
+        """
+        Provides the timestamp of the newest data file found in the object
+        directory.
+
+        :return: A Timestamp instance, or None if no data file was found.
+        :raises DiskFileNotOpen: if the open() method has not been previously
+                                 called on this instance.
+        """
+        if self._metadata:
+            return Timestamp(self._metadata.get(X_TIMESTAMP))
+        return None
+
+    @property
+    def fragments(self):
+        return None
+
+    @property
+    def content_type(self):
+        if self._metadata is None:
+            raise DiskFileNotOpen()
+        return self._metadata.get(X_CONTENT_TYPE)
+
+    @property
+    def content_type_timestamp(self):
+        if self._metadata is None:
+            raise DiskFileNotOpen()
+        t = self._metadata.get('Content-Type-Timestamp') or \
+            self._metadata.get(X_TIMESTAMP)
+        return Timestamp(t)
 
     def open(self):
         """
@@ -709,6 +760,15 @@ class DiskFile(object):
         """
         self._disk_file_open = False
         self._close_fd()
+
+    def get_datafile_metadata(self):
+        '''gluster swift dont have seperate data,meta files '''
+        if self._metadata is None:
+            raise DiskFileNotOpen()
+        return self._metadata
+
+    def get_metafile_metadata(self):
+        return None
 
     def get_metadata(self):
         """
@@ -879,7 +939,6 @@ class DiskFile(object):
         :raises AlreadyExistsAsFile: if path or part of a path is not a \
                                      directory
         """
-
         data_file = os.path.join(self._put_datadir, self._obj)
 
         # Assume the full directory path exists to the file already, and
