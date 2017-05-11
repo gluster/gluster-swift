@@ -51,7 +51,7 @@ otherwise you can install it via pip:
 
     sudo pip install python-keystoneclient
 
-### <a name="keystone_swift_accounts />Creation of swift accounts ###
+### <a name="keystone_swift_accounts" />Creation of swift accounts ###
 
 Due to current limitations of gluster-swift, you *must* create one
 volume for each Keystone tenant (project), and its name *must* match
@@ -205,19 +205,19 @@ See <http://gholt.github.com/swauth/> for more information on Swauth.
 
 1. GSwauth is installed by default with Gluster-Swift.
 
-1. Create and start the `gsmetadata` gluster volume
+2. Create and start the `gsmetadata` gluster volume
 ~~~
 gluster volume create gsmetadata <hostname>:<brick>
 gluster volume start gsmetadata
 ~~~
 
-1. run `gluster-swift-gen-builders` with all volumes that should be
+3. run `gluster-swift-gen-builders` with all volumes that should be
     accessible by gluster-swift, including `gsmetadata`
 ~~~
 gluster-swift-gen-builders gsmetadata <other volumes>
 ~~~
 
-1. Change your proxy-server.conf pipeline to have gswauth instead of tempauth:
+4. Change your proxy-server.conf pipeline to have gswauth instead of tempauth:
 
     Was:
 ~~~
@@ -230,7 +230,7 @@ pipeline = catch_errors cache tempauth proxy-server
 pipeline = catch_errors cache gswauth proxy-server
 ~~~
 
-1. Add to your proxy-server.conf the section for the GSwauth WSGI filter:
+5. Add to your proxy-server.conf the section for the GSwauth WSGI filter:
 ~~~
 [filter:gswauth]
 use = egg:gluster_swift#gswauth
@@ -243,7 +243,7 @@ token_life = 86400
 max_token_life = 86400
 ~~~
 
-1. Restart your proxy server ``swift-init proxy reload``
+6. Restart your proxy server ``swift-init proxy reload``
 
 ##### Advanced options for GSwauth WSGI filter:
 

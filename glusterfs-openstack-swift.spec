@@ -2,7 +2,7 @@
 
 # The following values are provided by passing the following arguments
 # to rpmbuild.  For example:
-# 	--define "_version 1.0" --define "_release 1" --define "_name g4s"
+#         --define "_version 1.0" --define "_release 1" --define "_name g4s"
 #
 %{!?_version:%define _version __PKG_VERSION__}
 %{!?_name:%define _name __PKG_NAME__}
@@ -103,7 +103,7 @@ done
 
 %changelog
 * Wed May 10 2017 Venkata R Edara <redara@redhat.com> - 2.10.1
-- Rebase to Swift 2.10.1 (newton) 
+- Rebase to Swift 2.10.1 (newton)
 
 * Tue Mar 15 2016 Prashanth Pai <ppai@redhat.com> - 2.3.0-0
 - Rebase to swift kilo (2.3.0)

@@ -8,6 +8,7 @@
 * [What now?](#what_now)
 
 <a name="overview" />
+
 ## Overview
 Gluster-swift project enables object based access (over Swift and S3 API)
 to GlusterFS volumes.This guide is a great way to begin using gluster-swift,
@@ -24,6 +25,7 @@ the installation packages may vary.
 > NOTE: In Gluster-Swift, accounts must be GlusterFS volumes.
 
 <a name="gluster_setup" />
+
 ## Setting up GlusterFS
 
 ### Installing and starting GlusterFS
@@ -88,16 +90,17 @@ Mount the GlusterFS volume:
 ```
 
 <a name="swift_setup" />
+
 ## Setting up gluster-swift
 
-### Installing Openstack Swift (kilo version)
+### Installing Openstack Swift (newton version)
 
 If on Ubuntu 16.04:
 
 ```sh
 # apt install python-pip libffi-dev memcached
 # git clone https://github.com/openstack/swift; cd swift
-# git checkout -b kilo tags/kilo-eol
+# git checkout -b release-2.10.1 tags/2.10.1
 # pip install -r ./requirements.txt
 # python setup.py install
 ```
@@ -105,11 +108,11 @@ If on Ubuntu 16.04:
 If on CentOS 7:
 
 ```sh
-# yum install centos-release-openstack-kilo
+# yum install centos-release-openstack-newton
 # yum install openstack-swift-*
 ```
 
-### Installing gluster-swift (kilo version)
+### Installing gluster-swift (newton version)
 
 If on Ubuntu 16.04:
 
@@ -173,6 +176,7 @@ Use the following commands to start gluster-swift:
 ```
 
 <a name="using_swift" />
+
 ## Using gluster-swift
 
 ### Create a container
@@ -215,6 +219,7 @@ following commands:
 ```
 
 <a name="what_now" />
+
 ## What now?
 For more information, please visit the following links:
 
