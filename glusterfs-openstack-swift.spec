@@ -24,11 +24,11 @@ Requires : memcached
 Requires : openssl
 Requires : python
 Requires : python-prettytable
-Requires : openstack-swift = 2.10.1
-Requires : openstack-swift-account = 2.10.1
-Requires : openstack-swift-container = 2.10.1
-Requires : openstack-swift-object = 2.10.1
-Requires : openstack-swift-proxy = 2.10.1
+Requires : openstack-swift = 2.15.1
+Requires : openstack-swift-account = 2.15.1
+Requires : openstack-swift-container = 2.15.1
+Requires : openstack-swift-object = 2.15.1
+Requires : openstack-swift-proxy = 2.15.1
 # gluster-swift has no hard-dependency on particular version of glusterfs
 # so don't bump this up unless you want to force users to upgrade their
 # glusterfs deployment
@@ -102,6 +102,9 @@ done
 %config(noreplace) %{_confdir}/object-expirer.conf-gluster
 
 %changelog
+* Wed Nov 22 2017 Venkata R Edara <redara@redhat.com> - 2.15.1
+- Rebase to Swift 2.15.1 (pike)
+
 * Wed May 10 2017 Venkata R Edara <redara@redhat.com> - 2.10.1
 - Rebase to Swift 2.10.1 (newton)
 

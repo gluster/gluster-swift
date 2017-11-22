@@ -1265,7 +1265,7 @@ class TestAccountBroker(unittest.TestCase):
         listing = broker.list_containers_iter(100, '', None, None,
                                               '', 'text/plain')
         self.assertEquals(len(listing), 10)
-        for i, (name, o_count, bytes_used, j) in enumerate(listing):
+        for i, (name, o_count, bytes_used, last_modified, j) in enumerate(listing):
             self.assertEqual(name, 'lci%d' % i)
             self.assertEqual(o_count, 0)
             self.assertEqual(bytes_used, 0)

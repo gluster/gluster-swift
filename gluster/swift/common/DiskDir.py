@@ -37,7 +37,7 @@ from gluster.swift.common.utils import ThreadPool
 
 
 DATADIR = 'containers'
-
+# dict to have mapping of delimiter selected obj to real obj name
 # Create a dummy db_file in Glusterfs.RUN_DIR
 _db_file = ""
 
@@ -405,7 +405,6 @@ class DiskDir(DiskCommon):
         """
         assert limit >= 0
         assert not delimiter or (len(delimiter) == 1 and ord(delimiter) <= 254)
-
         if path is not None:
             if path:
                 prefix = path = path.rstrip('/') + '/'
@@ -507,7 +506,9 @@ class DiskDir(DiskCommon):
                     and not dir_is_object(metadata):
                 continue
             list_item = []
+
             list_item.append(obj)
+
             if metadata:
                 list_item.append(metadata[X_TIMESTAMP])
                 list_item.append(int(metadata[X_CONTENT_LENGTH]))
@@ -551,7 +552,6 @@ class DiskDir(DiskCommon):
         if self._dir_exists and Glusterfs._container_update_object_count and \
                 self.account != 'gsexpiring':
             self._update_object_count()
-
         data = {'account': self.account, 'container': self.container,
                 'object_count': self.metadata.get(
                     X_OBJECTS_COUNT, ('0', 0))[0],
@@ -589,6 +589,7 @@ class DiskDir(DiskCommon):
             do_chown(self.datadir, self.uid, self.gid)
         metadata = get_container_metadata(self.datadir)
         metadata[X_TIMESTAMP] = (timestamp, 0)
+        metadata[X_PUT_TIMESTAMP] = (timestamp, 0)
         write_metadata(self.datadir, metadata)
         self.metadata = metadata
         self._dir_exists = True
@@ -606,7 +607,8 @@ class DiskDir(DiskCommon):
         if not do_exists(self.datadir):
             self.initialize(timestamp)
         else:
-            if timestamp > self.metadata[X_PUT_TIMESTAMP]:
+            existing_timestamp = self.metadata[X_PUT_TIMESTAMP][0]
+            if timestamp > existing_timestamp:
                 self.metadata[X_PUT_TIMESTAMP] = (timestamp, 0)
                 write_metadata(self.datadir, self.metadata)
 
@@ -845,10 +847,11 @@ class DiskAccount(DiskCommon):
             # the following ordered fields:
             # (name, object_count, bytes_used, is_subdir)
             for container in containers:
-                # When response_content_type == 'text/plain', Swift will only
-                # consume the name of the container (first element of tuple).
-                # Refer: swift.account.utils.account_listing_response()
-                account_list.append((container, 0, 0, 0))
+                # When response_content_type == 'text/plain', Swift will
+                # only consume the name of the container (first element of
+                # tuple).Refer:
+                # swift.account.utils.account_listing_response()
+                account_list.append((container, 0, 0, 0, 0))
                 if len(account_list) >= limit:
                     break
             if reverse:
@@ -873,6 +876,7 @@ class DiskAccount(DiskCommon):
             if metadata:
                 list_item.append(metadata[X_OBJECTS_COUNT][0])
                 list_item.append(metadata[X_BYTES_USED][0])
+                list_item.append(metadata[X_PUT_TIMESTAMP][0])
                 list_item.append(0)
             account_list.append(list_item)
             count += 1

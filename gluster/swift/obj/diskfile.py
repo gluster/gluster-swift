@@ -1081,7 +1081,7 @@ class DiskFile(object):
                     X_OBJECT_TYPE, X_TYPE]
 
         for key in sys_keys:
-            if key in orig_metadata:
+            if key in orig_metadata and key not in metadata:
                 metadata[key] = orig_metadata[key]
 
         if X_OBJECT_TYPE not in orig_metadata:

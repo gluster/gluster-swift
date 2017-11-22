@@ -366,26 +366,39 @@ class Base(object):
         if optional_fields is None:
             optional_fields = ()
 
+        def is_int_header(header):
+            if header.startswith('x-account-storage-policy-') and \
+                    header.endswith(('-bytes-used', '-object-count')):
+                return True
+            return header in (
+                'content-length',
+                'x-account-container-count',
+                'x-account-object-count',
+                'x-account-bytes-used',
+                'x-container-object-count',
+                'x-container-bytes-used',
+            )
+
         headers = dict(self.conn.response.getheaders())
         ret = {}
 
-        for field in required_fields:
-            if field[1] not in headers:
+        for return_key, header in required_fields:
+            if header not in headers:
                 raise ValueError("%s was not found in response header" %
-                                 (field[1]))
+                                 (header,))
 
-            try:
-                ret[field[0]] = int(headers[field[1]])
-            except ValueError:
-                ret[field[0]] = headers[field[1]]
+            if is_int_header(header):
+                ret[return_key] = int(headers[header])
+            else:
+                ret[return_key] = headers[header]
 
-        for field in optional_fields:
-            if field[1] not in headers:
+        for return_key, header in optional_fields:
+            if header not in headers:
                 continue
-            try:
-                ret[field[0]] = int(headers[field[1]])
-            except ValueError:
-                ret[field[0]] = headers[field[1]]
+            if is_int_header(header):
+                ret[return_key] = int(headers[header])
+            else:
+                ret[return_key] = headers[header]
 
         return ret
 
@@ -425,6 +438,7 @@ class Account(Base):
             raise RequestError('Invalid format: %s' % format_type)
         if format_type is None and 'format' in parms:
             del parms['format']
+
         status = self.conn.make_request('GET', self.path, hdrs=hdrs,
                                         parms=parms, cfg=cfg)
         if status == 200:
@@ -435,10 +449,11 @@ class Account(Base):
                 return conts
             elif format_type == 'xml':
                 conts = []
-                tree = minidom.parseString(self.conn.response.read())
+                respString = self.conn.response.read()
+                tree = minidom.parseString(respString)
                 for x in tree.getElementsByTagName('container'):
                     cont = {}
-                    for key in ['name', 'count', 'bytes']:
+                    for key in ['name', 'count', 'bytes', 'last_modified']:
                         cont[key] = x.getElementsByTagName(key)[0].\
                             childNodes[0].nodeValue
                     conts.append(cont)
@@ -481,8 +496,11 @@ class Account(Base):
         fields = [['object_count', 'x-account-object-count'],
                   ['container_count', 'x-account-container-count'],
                   ['bytes_used', 'x-account-bytes-used']]
+        optional_fields = [
+            ['temp-url-key', 'x-account-meta-temp-url-key'],
+            ['temp-url-key-2', 'x-account-meta-temp-url-key-2']]
 
-        return self.header_fields(fields)
+        return self.header_fields(fields, optional_fields=optional_fields)
 
     @property
     def path(self):
@@ -556,6 +574,7 @@ class Container(Base):
             raise RequestError('Invalid format: %s' % format_type)
         if format_type is None and 'format' in parms:
             del parms['format']
+
         status = self.conn.make_request('GET', self.path, hdrs=hdrs,
                                         parms=parms, cfg=cfg)
         if status == 200:
@@ -626,7 +645,12 @@ class Container(Base):
                                ['object_count', 'x-container-object-count'],
                                ['last_modified', 'last-modified']]
             optional_fields = [
+                # N.B. swift doesn't return both x-versions-location
+                # and x-history-location at a response so that this is safe
+                # using same variable "versions" for both and it means
+                # versioning is enabled.
                 ['versions', 'x-versions-location'],
+                ['versions', 'x-history-location'],
                 ['tempurl_key', 'x-container-meta-temp-url-key'],
                 ['tempurl_key2', 'x-container-meta-temp-url-key-2']]
 
@@ -677,6 +701,7 @@ class File(Base):
 
         if cfg.get('x_delete_at'):
             headers['X-Delete-At'] = cfg.get('x_delete_at')
+
         if cfg.get('x_delete_after'):
             headers['X-Delete-After'] = cfg.get('x_delete_after')
 
@@ -718,8 +743,11 @@ class File(Base):
         if 'Destination' in headers:
             headers['Destination'] = urllib.parse.quote(headers['Destination'])
 
-        return self.conn.make_request('COPY', self.path, hdrs=headers,
-                                      parms=parms) == 201
+        if self.conn.make_request('COPY', self.path, hdrs=headers,
+                                  cfg=cfg, parms=parms) != 201:
+            raise ResponseError(self.conn.response, 'COPY',
+                                self.conn.make_path(self.path))
+        return True
 
     def copy_account(self, dest_account, dest_cont, dest_file,
                      hdrs=None, parms=None, cfg=None):
@@ -744,8 +772,11 @@ class File(Base):
         if 'Destination' in headers:
             headers['Destination'] = urllib.parse.quote(headers['Destination'])
 
-        return self.conn.make_request('COPY', self.path, hdrs=headers,
-                                      parms=parms) == 201
+        if self.conn.make_request('COPY', self.path, hdrs=headers,
+                                  cfg=cfg, parms=parms) != 201:
+            raise ResponseError(self.conn.response, 'COPY',
+                                self.conn.make_path(self.path))
+        return True
 
     def delete(self, hdrs=None, parms=None, cfg=None):
         if hdrs is None:
@@ -780,6 +811,7 @@ class File(Base):
         optional_fields = [['x_object_manifest', 'x-object-manifest'],
                            ['x_delete_at', 'x-delete-at'],
                            ['x_delete_after', 'x-delete-after']]
+
 
         header_fields = self.header_fields(fields,
                                            optional_fields=optional_fields)
@@ -899,12 +931,10 @@ class File(Base):
             fobj.close()
 
     def sync_metadata(self, metadata=None, cfg=None, parms=None):
-        if metadata is None:
-            metadata = {}
         if cfg is None:
             cfg = {}
 
-        self.metadata.update(metadata)
+        self.metadata = self.metadata if metadata is None else metadata
 
         if self.metadata:
             headers = self.make_headers(cfg=cfg)
@@ -914,6 +944,7 @@ class File(Base):
                         cfg.get('set_content_length')
                 else:
                     headers['Content-Length'] = 0
+
             self.conn.make_request('POST', self.path, hdrs=headers,
                                    parms=parms, cfg=cfg)
 

@@ -51,6 +51,10 @@ class TestObjectExpirerEnv:
         conf = readconf('/etc/swift/object-expirer.conf', 'object-expirer')
         cls.expirer = ObjectExpirer(conf)
 
+    @classmethod
+    def tearDown(cls):
+        pass
+
 
 class TestObjectExpirer(Base):
     env = TestObjectExpirerEnv

@@ -15,7 +15,7 @@
 
 # See http://code.google.com/p/python-nose/issues/detail?id=373
 # The code below enables nosetests to work with i18n _() blocks
-
+from __future__ import print_function
 import sys
 import os
 try:
@@ -32,6 +32,8 @@ except ImportError:
         if not short or len(result) < _MAX_LENGTH:
             return result
         return result[:_MAX_LENGTH] + ' [truncated]...'
+
+from eventlet.green import socket
 
 # make unittests pass on all locale
 import swift
@@ -61,17 +63,26 @@ def get_config(section_name=None, defaults=None):
                                  '/etc/swift/test.conf')
     try:
         config = readconf(config_file, section_name)
-    except SystemExit:
+    except IOError:
         if not os.path.exists(config_file):
-            print >>sys.stderr, \
-                'Unable to read test config %s - file not found' \
-                % config_file
+            print('Unable to read test config %s - file not found'
+                  % config_file, file=sys.stderr)
         elif not os.access(config_file, os.R_OK):
-            print >>sys.stderr, \
-                'Unable to read test config %s - permission denied' \
-                % config_file
-        else:
-            print >>sys.stderr, \
-                'Unable to read test config %s - section %s not found' \
-                % (config_file, section_name)
+            print('Unable to read test config %s - permission denied'
+                  % config_file, file=sys.stderr)
+    except ValueError as e:
+        print(e)
     return config
+
+
+def listen_zero():
+    """
+    The eventlet.listen() always sets SO_REUSEPORT, so when called with
+    ("localhost",0), instead of returning unique ports it can return the
+    same port twice. That causes our tests to fail, so open-code it here
+    without SO_REUSEPORT.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(50)
+    return sock

@@ -15,7 +15,7 @@
 
 from swift.account.utils import FakeAccountBroker, get_response_headers
 from swift.common.swob import HTTPOk, HTTPNoContent
-from swift.common.utils import json
+from swift.common.utils import json, Timestamp
 from xml.sax import saxutils
 
 
@@ -37,24 +37,29 @@ def account_listing_response(account, req, response_content_type, broker=None,
                                                response_content_type, reverse)
     if response_content_type == 'application/json':
         data = []
-        for (name, object_count, bytes_used, is_subdir) in account_list:
+        for (name, object_count, bytes_used, put_tstamp,
+             is_subdir) in account_list:
             if is_subdir:
                 data.append({'subdir': name})
             else:
                 data.append({'name': name, 'count': object_count,
-                             'bytes': bytes_used})
+                             'bytes': bytes_used,
+                             'last_modified': Timestamp(put_tstamp).isoformat})
         account_list = json.dumps(data)
     elif response_content_type.endswith('/xml'):
         output_list = ['<?xml version="1.0" encoding="UTF-8"?>',
                        '<account name=%s>' % saxutils.quoteattr(account)]
-        for (name, object_count, bytes_used, is_subdir) in account_list:
+        for (name, object_count, bytes_used, put_tstamp,
+             is_subdir) in account_list:
             if is_subdir:
                 output_list.append(
                     '<subdir name=%s />' % saxutils.quoteattr(name))
             else:
                 item = '<container><name>%s</name><count>%s</count>' \
-                       '<bytes>%s</bytes></container>' % \
-                       (saxutils.escape(name), object_count, bytes_used)
+                       '<bytes>%s</bytes><last_modified>%s</last_modified> \
+                        </container>' % \
+                       (saxutils.escape(name), object_count, bytes_used,
+                        Timestamp(put_tstamp).isoformat)
                 output_list.append(item)
         output_list.append('</account>')
         account_list = '\n'.join(output_list)
